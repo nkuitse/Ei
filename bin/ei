@@ -1,0 +1,103 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Ei;
+use Text::Table;
+use Getopt::Long
+    qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
+
+my %outfields = (
+    'default' => [
+        ['#'        => 'Item'           ],
+        ['title'    => 'Title',    ''   ],
+        ['loc'      => 'Location', ''   ],
+    ],
+);
+my $outform = 'default';
+
+if (@ARGV == 0) {
+    usage();
+}
+elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
+    $ARGV[0] = $1;
+    unshift @ARGV, 'grep';
+}
+
+&{ __PACKAGE__->can('cmd_' . shift) || usage() };
+
+my $eifile;
+my $ei;
+
+sub cmd_ls {
+    out( sort { $a->{'#'} <=> $b->{'#'} } items() );
+}
+
+sub cmd_item {
+    usage() if @ARGV < 1;
+    my $i = shift @ARGV;
+    out( grep { $_->{'id'} eq $i } items() );
+}
+
+sub match {
+    my ($cond) = @_;
+    my %ref2code = (
+        '' => sub {
+            my ($c) = @_;
+            return $c->();
+        },
+        'HASH' => sub {
+            foreach (values %$_) {
+                return 1 if match(@_);
+            }
+        },
+        'ARRAY' => sub {
+            foreach (@$_) {
+                return 1 if match(@_);
+            }
+        },
+    );
+    return $ref2code{ref $_}->($cond);
+    #return $cond->() if !ref;
+    #return match_hash($cond, $_) if $r eq 'HASH';
+}
+
+sub cmd_grep {
+    usage() if @ARGV < 1;
+    my $patt = shift @ARGV;
+    my $rx = qr/$patt/i;
+    out( grep { match(sub { $_ =~ $rx }) } items() );
+    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } items() );
+}
+
+sub out {
+    return if !@_;
+    my (@fld, @col, @def);
+    foreach (@{ $outfields{$outform} }) {
+        push @fld, $_->[0];
+        push @col, \'  ' if @col;
+        push @col, $_->[1];
+        push @def, (@$_ > 2 ? $_->[2] : undef);
+    }
+    my $table = Text::Table->new(@col);
+    foreach my $item (@_) {
+        my @row;
+        foreach my $i (0..$#fld) {
+            my ($f, $d) = ($fld[$i], $def[$i]);
+            push @row, $item->{$f} // $d // die "No default $f for item $item->{'#'}";
+        }
+        $table->add(@row);
+    }
+    print $table;
+    ### printf "%5s %-12.12s %s\n", 'Item', 'Location', 'Description';
+    ### foreach (@_) {
+    ###     printf "%5d %-12.12s %s\n", $_->{'#'} // 0, $_->{'loc'} // '', $_->{'descrip'} // '';
+    ### }
+}
+
+sub items {
+    $ei ||= Ei->new($eifile = @ARGV ? shift @ARGV : \*STDIN);
+    $ei->items;
+}
+
