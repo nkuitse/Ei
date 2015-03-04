@@ -9,12 +9,17 @@ use File::Spec;
 
 use vars qw($VERSION);
 
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 sub new {
     my $cls = shift;
     unshift @_, 'file' if @_ % 2;
-    bless { @_ }, $cls;
+    my $self = bless { @_ }, $cls;
+    my $conf = _read_config($self->{'config_file'});
+    my $root = $self->{'root'} ||= glob($conf->{'files'}{'root'});
+    my $file = $self->{'file'} ||= glob($conf->{'files'}{'main'});
+    $self->{'file'} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
+    return $self;
 }
 
 sub file { $_[0]->{'file'} }
@@ -44,13 +49,13 @@ sub _read_items {
         }
         elsif (s/^\s*(\S+)\s+(?=\{)//) {
             my $key = $1;
-            my $hash = _read_value($_, $fh);
+            my $hash = _read_value($_, $fh, $f, $.);
             $hash->{'#'} = $key;
             push @items, $hash;
         }
 #       elsif (s/^\s*(\S+)\s+//) {
 #           my $key = $1;
-#           my $val = _read_value($_, $fh);
+#           my $val = _read_value($_, $fh, $f, $.);
 #           die "Value $val is not a hash" if ref($val) ne 'HASH';
 #           $val->{'#'} = $key;
 #           push @items, $val;
@@ -64,57 +69,71 @@ sub _read_items {
 
 sub _read_value {
     local $_ = shift;
-    my $fh = shift;
-    return [ map { trim($_) } split /,\s*/, $1 ] if /^\s*\[(.+)\]\s*$/;
-    return { map { my ($k, $v) = split /\s*=\s*/; (trim($k), trim($v)) } split /,\s*/, $1 } if /^\s*\{(.+)\}\s*$/;
+    my ($fh, $f, $l) = @_;
+    return [ map { trim($_) } split /,/, $1 ] if /^\s*\[(.+)\]\s*$/;
+    return { map { my ($k, $v) = split /=/; (trim($k), trim($v)) } split /,/, $1 } if /^\s*\{(.+)\}\s*$/;
     return $1 if /^\s*"(.+)"\s*$/;
-    return _read_array($fh)  if /^\s*\[\s*$/;
-    return _read_hash($fh)   if /^\s*\{\s*$/;
-    return _read_string($fh) if /^\s*\"\s*$/;
+    return _read_array($fh, $f, $l)  if /^\s*\[\s*$/;
+    return _read_hash($fh, $f, $l)   if /^\s*\{\s*$/;
+    return _read_string($fh, $f, $l) if /^\s*\"\s*$/;
     die if !/^\s*=\s*(.*)$/;
     return trim($1);
 }
 
 sub _read_array {
-    my ($fh) = @_;
-    my @array;
+    my ($fh, $f, $l) = @_;
+    my (@array, $ok);
     my $i = 0;
     while (<$fh>) {
         next if /^\s*(?:#.*)?$/;
-        last if /^\s*\]\s*$/;
-        $array[$i++] = _read_value($_, $fh);
+        $ok = 1, last if /^\s*\]\s*$/;
+        $array[$i++] = _read_value($_, $fh, $f, $.);
     }
+    die "Unterminated array at line $l of $f" if !$ok;
     return \@array;
 }
 
 sub _read_hash {
-    my ($fh) = @_;
-    my %hash;
+    my ($fh, $f, $l) = @_;
+    my (%hash, $ok);
     while (<$fh>) {
         next if /^\s*(?:#.*)?$/;
-        last if /^\s*\}\s*$/;
+        $ok = 1, last if /^\s*\}\s*$/;
         s/^\s*(\S+)\s+// or die "Not a hash element: $_";
         my $key = $1;
-        my $val = _read_value($_, $fh);
+        my $val = _read_value($_, $fh, $f, $.);
         $hash{$key} = $val;
     }
+    die "Unterminated hash at line $l of $f" if !$ok;
     return \%hash;
 }
 
 sub _read_string {
-    my ($fh) = @_;
-    my @array;
+    my ($fh, $f, $l) = @_;
+    my (@array, $ok);
     my $str = '';
     while (<$fh>) {
-        last if /^\s*\"\s*$/;
+        $ok = 1, last if /^\s*\"\s*$/;
         $str .= $_;
     }
+    die "Unterminated string at line $l of $f" if !$ok;
     chomp $str;
     return $str;
 }
 
+sub _read_config {
+    my ($f) = @_;
+    open my $fh, '<', $f or die "Can't open $f $!";
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;
+        s/^config\s+// or die "Bad config file $f: $_";
+        return _read_hash($fh, $f, $.);
+    }
+}
+
 sub trim {
     local $_ = shift;
+    return '' if !defined;
     s/^\s+|\s+$//g;
     return $_;
 }
@@ -131,13 +150,11 @@ Ei - manage an inventory of stuff
 
 __END__
 
-[47]
-descrip = Water heater
-purchase {
-  date = 2012-2013
-  loc = Sears?
+47 {
+    descrip = Water heater
+    purchase {
+        date = 2012-2013
+        loc = Sears?
+    }
+    location = basement
 }
-location = basement
-
-[48]
-descrip = 

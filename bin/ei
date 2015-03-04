@@ -8,6 +8,25 @@ use Text::Table;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
+sub usage;
+sub fatal;
+
+my $config_file;
+GetOptions(
+    'c|config-file=s' => \$config_file,
+) or usage;
+if (!defined $config_file) {
+    ($config_file) =
+        grep { defined && -f } (
+            $ENV{'EI_CONFIG'},
+            map { glob($_) } qw(~/.eirc ~/etc/ei/ei.conf /etc/ei/ei.conf)
+        )
+    ;
+}
+my $ei = Ei->new(
+    defined $config_file ? ('config_file' => $config_file) : (),
+);
+
 my %outfields = (
     'default' => [
         ['#'        => 'Item'           ],
@@ -18,26 +37,23 @@ my %outfields = (
 my $outform = 'default';
 
 if (@ARGV == 0) {
-    usage();
+    usage;
 }
 elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
     $ARGV[0] = $1;
     unshift @ARGV, 'grep';
 }
 
-&{ __PACKAGE__->can('cmd_' . shift) || usage() };
-
-my $eifile;
-my $ei;
+&{ __PACKAGE__->can('cmd_' . shift) || usage };
 
 sub cmd_ls {
-    out( sort { $a->{'#'} <=> $b->{'#'} } items() );
+    out( sort { $a->{'#'} <=> $b->{'#'} } $ei->items );
 }
 
 sub cmd_item {
-    usage() if @ARGV < 1;
+    usage if @ARGV < 1;
     my $i = shift @ARGV;
-    out( grep { $_->{'id'} eq $i } items() );
+    out( grep { $_->{'id'} eq $i } $ei->items );
 }
 
 sub match {
@@ -64,11 +80,11 @@ sub match {
 }
 
 sub cmd_grep {
-    usage() if @ARGV < 1;
+    usage if @ARGV < 1;
     my $patt = shift @ARGV;
     my $rx = qr/$patt/i;
-    out( grep { match(sub { $_ =~ $rx }) } items() );
-    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } items() );
+    out( grep { match(sub { $_ =~ $rx }) } $ei->items );
+    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
 }
 
 sub out {
@@ -94,10 +110,5 @@ sub out {
     ### foreach (@_) {
     ###     printf "%5d %-12.12s %s\n", $_->{'#'} // 0, $_->{'loc'} // '', $_->{'descrip'} // '';
     ### }
-}
-
-sub items {
-    $ei ||= Ei->new($eifile = @ARGV ? shift @ARGV : \*STDIN);
-    $ei->items;
 }
 
