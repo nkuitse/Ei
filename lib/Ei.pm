@@ -14,7 +14,7 @@ sub new {
     my $cls = shift;
     unshift @_, 'file' if @_ % 2;
     my $self = bless { @_ }, $cls;
-    my $conf = $self->_read_config($self->{'config_file'});
+    my $conf = $self->{'config'} = $self->_read_config($self->{'config_file'});
     my $root = $self->{'root'} ||= glob($conf->{'files'}{'root'});
     my $file = $self->{'file'} ||= glob($conf->{'files'}{'main'});
     $self->{'defaults'} = $conf->{'items'}{'defaults'} || {};
