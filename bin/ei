@@ -126,3 +126,13 @@ sub out {
     ### }
 }
 
+sub usage {
+    print STDERR "usage: ei [-c CONFIGFILE] COMMAND [OPTION]...\n";
+    exit 1;
+}
+
+sub fatal {
+    print STDERR "ei: @_\n";
+    exit 2;
+}
+
