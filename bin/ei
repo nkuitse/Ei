@@ -73,7 +73,7 @@ sub cmd_ls {
 sub cmd_item {
     usage if @ARGV < 1;
     my $i = shift @ARGV;
-    out( grep { $_->{'id'} eq $i } $ei->items );
+    out( grep { $_->{'#'} eq $i } $ei->items );
 }
 
 sub byid {
