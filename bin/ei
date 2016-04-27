@@ -31,7 +31,7 @@ my %outfields = (
     'default' => [
         ['#'        => 'Item'           ],
         ['title'    => 'Title',    ''   ],
-        ['loc'      => 'Location', ''   ],
+        ['location' => 'Location', ''   ],
     ],
 );
 my $outform = 'default';

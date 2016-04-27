@@ -164,7 +164,7 @@ __END__
     descrip = Water heater
     purchase {
         date = 2012-2013
-        loc = Sears?
+        location = Sears?
     }
     location = basement
 }
