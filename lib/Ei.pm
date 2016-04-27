@@ -3,7 +3,6 @@ package Ei;
 use strict;
 use warnings;
 
-use File::Kvpar;
 use File::Basename qw(dirname);
 use File::Spec;
 
@@ -42,15 +41,18 @@ sub _read_items {
         next if /^\s*(?:#.*)?$/;
         if (/^!include\s+(\S+)$/) {
             my $source = File::Spec->rel2abs($1, dirname($f));
-            my @files = -d $source ? grep { -f } glob("$source/*.ei") : ($source);
+            my @files = -d $source ? grep { -f } glob("$source/*.ei") : (glob($source));
             foreach my $f (@files) {
                 push @items, $self->_read_items($f);
             }
         }
         elsif (s/^\s*(?:"(\\.|[^\\"])+"|(\S+))\s+(?=\{)//) {
             my $key = defined $1 ? unquote($1) : $2;
+            my $line = $.;
             my $hash = $self->_read_value($_, $fh, $f, $.);
             $hash->{'#'} = $key;
+            $hash->{'/'} = $f;
+            $hash->{'.'} = $line;
             push @items, $hash;
         }
 #       elsif (s/^\s*(\S+)\s+//) {
@@ -61,7 +63,7 @@ sub _read_items {
 #           push @items, $val;
 #       }
         else {
-            die qq{Expected hash element, found "$_"};
+            die qq{Expected hash element at line $. of $f};
         }
     }
     return @items;
