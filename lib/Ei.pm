@@ -171,14 +171,3 @@ sub trim {
 Ei - manage an inventory of stuff
 
 =cut
-
-__END__
-
-47 {
-    descrip = Water heater
-    purchase {
-        date = 2012-2013
-        location = Sears?
-    }
-    location = basement
-}
