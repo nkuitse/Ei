@@ -27,7 +27,7 @@ my $ei = Ei->new(
     defined $config_file ? ('config_file' => $config_file) : (),
 );
 
-my %outfields = (
+my %outprop = (
     'default' => [
         ['#'        => 'Item'           ],
         ['title'    => 'Title',    ''   ],
@@ -39,12 +39,12 @@ my $display = $ei->{'config'}{'display'};
 if ($display) {
     while (my ($form, $disp) = each %$display) {
         my $cols = $disp->{columns} or next;
-        my @outfields;
+        my @outprops;
         foreach (@$cols) {
-            my ($field, $label) = @$_{qw(field label)};
-            push @outfields, [ $field, $label, '' ];
+            my ($prop, $label) = @$_{qw(property label)};
+            push @outprops, [ $prop, $label, '' ];
         }
-        $outfields{$form} = \@outfields;
+        $outprop{$form} = \@outprops;
     }
 }
 
@@ -55,8 +55,13 @@ elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
     $ARGV[0] = $1;
     unshift @ARGV, 'grep';
 }
+elsif (@ARGV && $ARGV[0] =~ s{^[+](?=.)}{}) {
+    unshift @ARGV, 'add', '-p';
+}
 
 &{ __PACKAGE__->can('cmd_' . shift) || usage };
+
+# --- Commands
 
 sub cmd_ed {
     usage if @ARGV < 1;
@@ -75,6 +80,24 @@ sub cmd_item {
     my $i = shift @ARGV;
     out( grep { $_->{'#'} eq $i } $ei->items );
 }
+
+sub cmd_grep {
+    usage if @ARGV < 1;
+    my $patt = shift @ARGV;
+    my $rx = qr/$patt/i;
+    out( grep { match(sub { $_ =~ $rx }) } $ei->items );
+    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
+}
+
+sub cmd_add {
+    my ($prototype);
+    GetOptions(
+        'p|prototype=s' => \$prototype,
+    ) or usage;
+    usage if @ARGV < 1;
+}
+
+# --- Other functions
 
 sub byid {
     my ($aa, $an) = ($a->{'#'} =~ /^([a-z]*)([0-9]*)/);
@@ -105,18 +128,10 @@ sub match {
     #return match_hash($cond, $_) if $r eq 'HASH';
 }
 
-sub cmd_grep {
-    usage if @ARGV < 1;
-    my $patt = shift @ARGV;
-    my $rx = qr/$patt/i;
-    out( grep { match(sub { $_ =~ $rx }) } $ei->items );
-    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
-}
-
 sub out {
     return if !@_;
     my (@fld, @col, @def);
-    foreach (@{ $outfields{$outform} }) {
+    foreach (@{ $outprop{$outform} }) {
         push @fld, $_->[0];
         push @col, \'  ' if @col;
         push @col, $_->[1];
