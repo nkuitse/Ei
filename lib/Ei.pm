@@ -34,7 +34,7 @@ sub items {
 }
 
 sub _read_items {
-    my ($self, $f) = @_;
+    my ($self, $f, %default) = @_;
     open my $fh, '<', $f or die "Can't open $f $!";
     my @items;
     while (<$fh>) {
@@ -43,17 +43,23 @@ sub _read_items {
             my $source = File::Spec->rel2abs($1, dirname($f));
             my @files = -d $source ? grep { -f } glob("$source/*.ei") : (glob($source));
             foreach my $f (@files) {
-                push @items, $self->_read_items($f);
+                push @items, $self->_read_items($f, %default);
             }
+        }
+        elsif (/^!default\s+(\S+)\s+(.*)$/) {
+            $default{$1} = $2;
         }
         elsif (s/^\s*(?:"(\\.|[^\\"])+"|(\S+))\s+(?=\{)//) {
             my $key = defined $1 ? unquote($1) : $2;
             my $line = $.;
-            my $hash = $self->_read_value($_, $fh, $f, $.);
-            $hash->{'#'} = $key;
-            $hash->{'/'} = $f;
-            $hash->{'.'} = $line;
-            push @items, $hash;
+            my %item = (
+                %default,
+                %{ $self->_read_value($_, $fh, $f, $.) },
+            );
+            $item{'#'} = $key;
+            $item{'/'} = $f;
+            $item{'.'} = $line;
+            push @items, \%item;
         }
 #       elsif (s/^\s*(\S+)\s+//) {
 #           my $key = $1;
