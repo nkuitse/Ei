@@ -37,7 +37,7 @@ my %outfields = (
 my $outform = 'default';
 
 if (@ARGV == 0) {
-    usage;
+    @ARGV = ('ls');
 }
 elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
     $ARGV[0] = $1;
@@ -46,14 +46,28 @@ elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
 
 &{ __PACKAGE__->can('cmd_' . shift) || usage };
 
+sub cmd_ed {
+    usage if @ARGV < 1;
+    my $id = shift @ARGV;
+    my @items = grep { $_->{'#'} eq $id } $ei->items;
+    exit 2 if !@items;
+    system($ENV{'VISUAL'}||$ENV{'EDITOR'}||'vi', "+$_->{'.'}", $_->{'/'}) for $items[0];
+}
+
 sub cmd_ls {
-    out( sort { $a->{'#'} <=> $b->{'#'} } $ei->items );
+    out( sort byid $ei->items );
 }
 
 sub cmd_item {
     usage if @ARGV < 1;
     my $i = shift @ARGV;
     out( grep { $_->{'id'} eq $i } $ei->items );
+}
+
+sub byid {
+    my ($aa, $an) = ($a->{'#'} =~ /^([a-z]*)([0-9]*)/);
+    my ($ba, $bn) = ($b->{'#'} =~ /^([a-z]*)([0-9]*)/);
+    return $aa cmp $ba || $an <=> $bn;
 }
 
 sub match {
@@ -105,7 +119,7 @@ sub out {
         }
         $table->add(@row);
     }
-    print $table;
+    print $table->title, $table->rule(sub { '-' x $_[1] }, sub { '' }), $table->body;
     ### printf "%5s %-12.12s %s\n", 'Item', 'Location', 'Description';
     ### foreach (@_) {
     ###     printf "%5d %-12.12s %s\n", $_->{'#'} // 0, $_->{'loc'} // '', $_->{'descrip'} // '';
