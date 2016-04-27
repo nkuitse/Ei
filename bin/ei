@@ -35,6 +35,18 @@ my %outfields = (
     ],
 );
 my $outform = 'default';
+my $display = $ei->{'config'}{'display'};
+if ($display) {
+    while (my ($form, $disp) = each %$display) {
+        my $cols = $disp->{columns} or next;
+        my @outfields;
+        foreach (@$cols) {
+            my ($field, $label) = @$_{qw(field label)};
+            push @outfields, [ $field, $label, '' ];
+        }
+        $outfields{$form} = \@outfields;
+    }
+}
 
 if (@ARGV == 0) {
     @ARGV = ('ls');
