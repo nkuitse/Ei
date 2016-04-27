@@ -17,6 +17,7 @@ sub new {
     my $conf = $self->_read_config($self->{'config_file'});
     my $root = $self->{'root'} ||= glob($conf->{'files'}{'root'});
     my $file = $self->{'file'} ||= glob($conf->{'files'}{'main'});
+    $self->{'defaults'} = $conf->{'items'}{'defaults'} || {};
     $self->{'file'} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
     return $self;
 }
@@ -34,7 +35,7 @@ sub items {
 }
 
 sub _read_items {
-    my ($self, $f, %default) = @_;
+    my ($self, $f, %defaults) = @_;
     open my $fh, '<', $f or die "Can't open $f $!";
     my @items;
     while (<$fh>) {
@@ -43,23 +44,30 @@ sub _read_items {
             my $source = File::Spec->rel2abs($1, dirname($f));
             my @files = -d $source ? grep { -f } glob("$source/*.ei") : (glob($source));
             foreach my $f (@files) {
-                push @items, $self->_read_items($f, %default);
+                push @items, $self->_read_items($f, %defaults);
             }
         }
         elsif (/^!default\s+(\S+)\s+(.*)$/) {
-            $default{$1} = $2;
+            $defaults{$1} = $2;
         }
         elsif (s/^\s*(?:"(\\.|[^\\"])+"|(\S+))\s+(?=\{)//) {
             my $key = defined $1 ? unquote($1) : $2;
+            my $isdef = $key eq '*';
             my $line = $.;
             my %item = (
-                %default,
+                %{ $self->{'defaults'} },
+                %defaults,
                 %{ $self->_read_value($_, $fh, $f, $.) },
             );
-            $item{'#'} = $key;
-            $item{'/'} = $f;
-            $item{'.'} = $line;
-            push @items, \%item;
+            if ($isdef) {
+                %defaults = ( %defaults, %item );
+            }
+            else {
+                $item{'#'} = $key;
+                $item{'/'} = $f;
+                $item{'.'} = $line;
+                push @items, \%item;
+            }
         }
 #       elsif (s/^\s*(\S+)\s+//) {
 #           my $key = $1;
