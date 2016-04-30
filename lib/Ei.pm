@@ -14,15 +14,15 @@ sub new {
     my $cls = shift;
     unshift @_, 'file' if @_ % 2;
     my $self = bless { @_ }, $cls;
-    my $conf = $self->{'config'} = $self->_read_config($self->{'config_file'});
-    my $root = $self->{'root'} ||= glob($conf->{'files'}{'root'});
-    my $file = $self->{'file'} ||= glob($conf->{'files'}{'main'});
-    $self->{'defaults'} = $conf->{'items'}{'defaults'} || {};
-    $self->{'file'} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
+    my $conf = $self->{config} = $self->_read_config($self->{config_file});
+    my $root = $self->{root} ||= glob($conf->{files}{root});
+    my $file = $self->{file} ||= glob($conf->{files}{main});
+    $self->{defaults} = $conf->{items}{defaults} || {};
+    $self->{file} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
     return $self;
 }
 
-sub file { $_[0]->{'file'} }
+sub file { $_[0]->{file} }
 
 sub find {
     my $self = shift;
@@ -32,6 +32,31 @@ sub find {
 sub items {
     my ($self) = @_;
     return @{ $self->{'items'} ||= [ $self->_read_items($self->file) ] };
+}
+
+sub _read_file {
+    my ($self, $f, %defaults) = @_;
+    open my $fh, '<', $f or die "Can't open $f $!";
+    my %hash;
+    while (<$fh>) {
+        next if /^\s*(?:#.*)?$/;
+        if (/^!include\s+(\S+)$/) {
+            my $source = File::Spec->rel2abs($1, dirname($f));
+            my @files = -d $source ? grep { -f } glob("$source/*.ei") : (glob($source));
+            foreach my $f (@files) {
+                %hash = ( %hash, %{ $self->_read_file($f, %defaults) } );
+            }
+        }
+        elsif (s/^\s*(\S+)\s+//) {
+            my $key = $1;
+            my $val = $self->_read_value($_, $fh, $f, $.);
+            $hash{$key} = $val;
+        }
+        else {
+            die qq{Expected a value at file $f line $.};
+        }
+    }
+    return \%hash;
 }
 
 sub _read_items {
@@ -141,12 +166,69 @@ sub _read_string {
 
 sub _read_config {
     my ($self, $f) = @_;
+    my $hash = $self->_read_file($f);
+    return $hash;
     open my $fh, '<', $f or die "Can't open $f $!";
     while (<$fh>) {
         next if /^\s*(?:#.*)?$/;
         s/^config\s+// or die "Bad config file $f: $_";
         return $self->_read_hash($fh, $f, $.);
     }
+}
+
+sub write {
+    my ($self, $fh, @items) = @_;
+    foreach my $item (@items) {
+        my $id = delete $item->{'#'} // delete $item->{id};
+        my $str = $self->serialize($item);
+        print $fh $id, ' ', $str, "\n\n";
+    }
+}
+
+sub prototype {
+    my ($self, $p) = @_;
+    my $proto = $self->{config}{prototypes}{$p} or return;
+    if (my $inherit = $proto->{inherit}) {
+        %{ $proto->{properties} } = (
+            %{ $self->prototype($inherit)->{properties} },
+            %{ $proto->{properties} },
+        );
+    }
+    return $proto;
+}
+
+sub serialize {
+    my $self = shift;
+    unshift @_, 0;
+    my @out = _serialize(@_);
+    # shift @out;
+    # pop @out;
+    return join "\n", @out;
+}
+
+sub _serialize {
+    my ($level, $val) = @_;
+    my $r = ref $val;
+    $_[0]++;
+    goto &_serialize_hash  if $r eq 'HASH';
+    goto &_serialize_array if $r eq 'ARRAY';
+    $_[0]--;
+    die if $r ne '';
+    return $val if $val !~ /^\s/ && $val !~ /^[\\\[\]\{\}]/;
+    $val =~ s/([\\\[\]\{\}])/\\$1/g;
+    return $val;
+}
+
+sub _serialize_hash {
+    my ($level, $hash) = @_;
+    my @out = '{';
+    my $indstr = '  ' x ($level-0);
+    while (my ($k, $v) = each %$hash) {
+        my @val = _serialize($level, $v);
+        push @out, sprintf('%s%s %s', $indstr, $k, shift @val);
+        push @out, @val;
+    }
+    return @out, '}';
 }
 
 sub unquote {

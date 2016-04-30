@@ -5,6 +5,7 @@ use warnings;
 
 use Ei;
 use Text::Table;
+use Clone qw(clone);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
@@ -63,6 +64,80 @@ elsif (@ARGV && $ARGV[0] =~ s{^[+](?=.)}{}) {
 
 # --- Commands
 
+sub cmd_add {
+    usage if @ARGV < 1;
+    my $p = shift @ARGV;
+    my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
+    my $fh;
+    my ($n, $nadded, $running) = (0, 0, 1);
+    $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $running = 0; print STDERR "\n" };
+ITEM:
+    while (1) {
+        print STDERR '-' x 80, "\n";
+        # printf STDERR "\e[32;1m%80d\e[0m\n", ++$n;
+        my $obj = clone($proto->{properties});
+        my %placeholders = placeholders($obj);
+        my %order = qw(
+            id       00000
+            uuid     00001
+            title    00002
+            location 00003
+        );
+        my @ordered_placeholders = sort {
+            my ($ak, $bk) = map { $_->[0] } $a, $b;
+            ($order{$ak} // $ak)
+            cmp
+            ($order{$bk} // $bk)
+        } values %placeholders;
+        foreach (@ordered_placeholders) {
+            my ($key, $valref, $action, @args) = @$_;
+            my $sub = __PACKAGE__->can('act_'.$action) || fatal "Unknown placeholder action: $action";
+            $sub->($key, $valref, @args);
+            last ITEM if !$running;
+        }
+        if (!defined $fh) {
+            my $save_file = $ei->{config}{files}{save};
+            $save_file = $ei->{config}{files}{root} . '/' . $save_file if $save_file !~ m{^/};
+            open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
+        }
+        last if !$running;
+        my $id = $obj->{'id'};
+        print STDERR "\e[32mSave $id?\e[0m [Ynq] ";
+        my $ans = <STDIN>;
+        last if ($ans // 'Q') =~ /^[Qq]/;
+        next if $ans =~ /^[Nn]/;
+        $ei->write($fh, $obj);
+        $nadded++;
+    }
+    print STDERR '-' x 80, "\n";
+    printf STDERR "\n\e[1m%d %s added\e[0m\n",
+        $nadded,
+        $nadded == 1 ? 'item' : 'items';
+}
+
+sub act_mint {
+    my ($key, $valref, $m, @etc) = @_;
+    my $minter = $ei->{config}{minters}{$m} or fatal "No such minter: $m";
+    my ($cmd, $args) = @$minter{qw(command arguments)};
+    open my $fh, '-|', $cmd, @{ $args || [] } or die;
+    my $val = <$fh>;
+    fatal "$cmd: no value returned" if !defined $val;
+    chomp $val;
+    $$valref = $val;
+    my $label = $ei->{config}{labels}{$key} // ucfirst $key;
+    print STDERR "  $label: $val\n";
+}
+
+sub act_ask {
+    my ($key, $valref, @args) = @_;
+    my $label = $ei->{config}{labels}{$key} // ucfirst $key;
+    print STDERR "  $label: ";
+    print STDERR "[$$valref] " if defined $$valref;
+    my $val = <STDIN>;
+    chomp $val;
+    $$valref = $val;
+}
+
 sub cmd_ed {
     usage if @ARGV < 1;
     my $id = shift @ARGV;
@@ -89,15 +164,40 @@ sub cmd_grep {
     #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
 }
 
-sub cmd_add {
-    my ($prototype);
-    GetOptions(
-        'p|prototype=s' => \$prototype,
-    ) or usage;
-    usage if @ARGV < 1;
+# --- Other functions
+
+sub instantiate {
+    my ($obj) = @_;
 }
 
-# --- Other functions
+sub placeholders {
+    my ($hash) = @_;
+    return _hash_placeholders($hash);
+}
+
+sub _hash_placeholders {
+    my ($hash, @path) = @_;
+    my @p;
+    while (my ($k, $v) = each %$hash) {
+        my $r = ref $v;
+        if ($r eq 'HASH') {
+            push @p, _hash_placeholders($v, ".$k");
+        }
+        elsif ($r eq 'ARRAY') {
+            push @p, _array_placeholders($v, "[$k]");
+        }
+        elsif ($r ne '') {
+            die "Huh???";
+        }
+        elsif ($v =~ /^<(.+)>$/) {
+            my $vref = \$hash->{$k};
+            my ($action, @args) = split /\s*:\s*/, $1;
+            undef $$vref;
+            push @p, [ join('', @path, $k), $vref, $action, @args ];
+        }
+    }
+    return map { $_->[0] => $_ } @p;
+}
 
 sub byid {
     my ($aa, $an) = ($a->{'#'} =~ /^([a-z]*)([0-9]*)/);
