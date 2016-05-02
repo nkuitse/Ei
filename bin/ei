@@ -27,6 +27,7 @@ if (!defined $config_file) {
 my $ei = Ei->new(
     defined $config_file ? ('config_file' => $config_file) : (),
 );
+my %config = %{ $ei->{config} };
 
 my %outprop = (
     'default' => [
@@ -36,7 +37,7 @@ my %outprop = (
     ],
 );
 my $outform = 'default';
-my $display = $ei->{'config'}{'display'};
+my $display = $config{'display'};
 if ($display) {
     while (my ($form, $disp) = each %$display) {
         my $cols = $disp->{columns} or next;
@@ -90,14 +91,14 @@ ITEM:
             ($order{$bk} // $bk)
         } values %placeholders;
         foreach (@ordered_placeholders) {
-            my ($key, $valref, $action, @args) = @$_;
-            my $sub = __PACKAGE__->can('act_'.$action) || fatal "Unknown placeholder action: $action";
-            $sub->($key, $valref, @args);
+            my ($key, $setter, $action, @args) = @$_;
+            my $sub = __PACKAGE__->can('ph_'.$action) || fatal "Unknown placeholder action: $action";
+            $sub->($key, $setter, @args);
             last ITEM if !$running;
         }
         if (!defined $fh) {
-            my $save_file = $ei->{config}{files}{save};
-            $save_file = $ei->{config}{files}{root} . '/' . $save_file if $save_file !~ m{^/};
+            my $save_file = $config{files}{save};
+            $save_file = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
             open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
         }
         last if !$running;
@@ -113,29 +114,6 @@ ITEM:
     printf STDERR "\n\e[1m%d %s added\e[0m\n",
         $nadded,
         $nadded == 1 ? 'item' : 'items';
-}
-
-sub act_mint {
-    my ($key, $valref, $m, @etc) = @_;
-    my $minter = $ei->{config}{minters}{$m} or fatal "No such minter: $m";
-    my ($cmd, $args) = @$minter{qw(command arguments)};
-    open my $fh, '-|', $cmd, @{ $args || [] } or die;
-    my $val = <$fh>;
-    fatal "$cmd: no value returned" if !defined $val;
-    chomp $val;
-    $$valref = $val;
-    my $label = $ei->{config}{labels}{$key} // ucfirst $key;
-    print STDERR "  $label: $val\n";
-}
-
-sub act_ask {
-    my ($key, $valref, @args) = @_;
-    my $label = $ei->{config}{labels}{$key} // ucfirst $key;
-    print STDERR "  $label: ";
-    print STDERR "[$$valref] " if defined $$valref;
-    my $val = <STDIN>;
-    chomp $val;
-    $$valref = $val;
 }
 
 sub cmd_ed {
@@ -164,7 +142,62 @@ sub cmd_grep {
     #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
 }
 
+# --- Placeholder handlers
+
+sub ph_mint {
+    my ($key, $setter, $m, @etc) = @_;
+    my $minter = $config{minters}{$m} or fatal "No such minter: $m";
+    my ($cmd, $args) = @$minter{qw(command arguments)};
+    open my $fh, '-|', $cmd, @{ $args || [] } or die;
+    my $val = <$fh>;
+    fatal "$cmd: no value returned" if !defined $val;
+    chomp $val;
+    $setter->($val);
+    my $label = $config{labels}{$key} // ucfirst $key;
+    print STDERR "  $label: $val\n";
+}
+
+sub ph_string {
+    my ($key, $setter, @args) = @_;
+    my $label = $config{labels}{$key} // ucfirst $key;
+    $setter->(ask($label));
+}
+
+sub ph_list {
+    my ($key, $setter, @args) = @_;
+    my $label = $config{labels}{$key} // ucfirst $key;
+    $setter->([ split /,\s*/, ask($label) ]);
+}
+
+sub ph_location {
+    my ($key, $setter, @args) = @_;
+    my $label = $config{labels}{$key} // ucfirst $key;
+    my %loc = %{ $config{locations} || {} };
+    my $locmsg = sprintf "Valid locations: %s\n", join(', ', sort keys %loc);
+    my $loc = ask($label, 'home', sub {
+        return 1 if defined $loc{$_};
+        print STDERR $locmsg, "\n";
+        return undef;
+    });
+    $setter->($loc);
+}
+
 # --- Other functions
+
+sub ask {
+    my ($label, $default, $validate) = @_;
+    local $_;
+    while (1) {
+        print STDERR "  $label: ";
+        print STDERR "[$default] " if defined $default;
+        $_ = <STDIN>;
+        chomp;
+        return $default if $_ eq '' && defined $default;
+        last if !$validate || $validate->();
+        # print STDERR "** That is not valid **\n";
+    }
+    return $_;
+}
 
 sub instantiate {
     my ($obj) = @_;
@@ -190,10 +223,9 @@ sub _hash_placeholders {
             die "Huh???";
         }
         elsif ($v =~ /^<(.+)>$/) {
-            my $vref = \$hash->{$k};
+            my $setter = sub { $hash->{$k} = shift };
             my ($action, @args) = split /\s*:\s*/, $1;
-            undef $$vref;
-            push @p, [ join('', @path, $k), $vref, $action, @args ];
+            push @p, [ join('', @path, $k), $setter, $action, @args ];
         }
     }
     return map { $_->[0] => $_ } @p;
