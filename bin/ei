@@ -53,17 +53,30 @@ if ($display) {
 if (@ARGV == 0) {
     @ARGV = ('ls');
 }
-elsif (@ARGV && $ARGV[0] =~ s{^/(.+)/$}{}) {
-    $ARGV[0] = $1;
-    unshift @ARGV, 'grep';
+elsif ($ARGV[0] =~ m{^\@(.+)$}) {
+    splice @ARGV, 0, 1, qw(find -l), $1;
 }
-elsif (@ARGV && $ARGV[0] =~ s{^[+](?=.)}{}) {
-    unshift @ARGV, 'add', '-p';
+elsif ($ARGV[0] =~ m{^/(.+)/$}) {
+    splice @ARGV, 0, 1, qw(grep), $1;
+}
+elsif ($ARGV[0] =~ m{^[+](?=.)}) {
+    splice @ARGV, 0, 1, qw(add -p), $1;
 }
 
 &{ __PACKAGE__->can('cmd_' . shift) || usage };
 
 # --- Commands
+
+sub cmd_find {
+    my ($location);
+    GetOptions(
+        'l=s' => \$location,
+    ) or usage;
+    if ($location) {
+        my @items = grep { ($_->{location} // '') eq $location } $ei->items;
+        out( sort byid @items );
+    }
+}
 
 sub cmd_add {
     usage if @ARGV < 1;
