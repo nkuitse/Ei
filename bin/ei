@@ -59,7 +59,7 @@ elsif ($ARGV[0] =~ m{^\@(.+)$}) {
 elsif ($ARGV[0] =~ m{^/(.+)/$}) {
     splice @ARGV, 0, 1, qw(grep), $1;
 }
-elsif ($ARGV[0] =~ m{^[+](?=.)}) {
+elsif ($ARGV[0] =~ m{^[+](.+)}) {
     splice @ARGV, 0, 1, qw(add -p), $1;
 }
 
