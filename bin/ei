@@ -79,8 +79,10 @@ sub cmd_find {
 }
 
 sub cmd_add {
-    usage if @ARGV < 1;
-    my $p = shift @ARGV;
+    my $p = 'object';
+    GetOptions(
+        'p=s' => \$p,
+    ) or usage;
     my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
     my $fh;
     my ($n, $nadded, $running) = (0, 0, 1);
