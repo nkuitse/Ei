@@ -107,6 +107,7 @@ ITEM:
         } values %placeholders;
         foreach (@ordered_placeholders) {
             my ($key, $setter, $action, @args) = @$_;
+            $key =~ s/^\.// or die "Huh?";
             my $sub = __PACKAGE__->can('ph_'.$action) || fatal "Unknown placeholder action: $action";
             $sub->($key, $setter, @args);
             last ITEM if !$running;
@@ -220,7 +221,11 @@ sub instantiate {
 
 sub placeholders {
     my ($hash) = @_;
-    return _hash_placeholders($hash);
+    my @placeholders = _hash_placeholders($hash);
+    return map {
+        my $k =  $_->[0];
+        $k => $_
+    } @placeholders;
 }
 
 sub _hash_placeholders {
@@ -240,10 +245,10 @@ sub _hash_placeholders {
         elsif ($v =~ /^<(.+)>$/) {
             my $setter = sub { $hash->{$k} = shift };
             my ($action, @args) = split /\s*:\s*/, $1;
-            push @p, [ join('', @path, $k), $setter, $action, @args ];
+            push @p, [ join('', @path, ".$k"), $setter, $action, @args ];
         }
     }
-    return map { $_->[0] => $_ } @p;
+    return @p;
 }
 
 sub byid {
