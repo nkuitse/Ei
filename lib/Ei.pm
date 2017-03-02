@@ -19,6 +19,7 @@ sub new {
     my $file = $self->{file} ||= glob($conf->{files}{main});
     $self->{defaults} = $conf->{items}{defaults} || {};
     $self->{file} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
+    $self->{interactive} ||= -t STDIN;
     return $self;
 }
 
@@ -32,6 +33,43 @@ sub find {
 sub items {
     my ($self) = @_;
     return @{ $self->{'items'} ||= [ $self->_read_items($self->file) ] };
+}
+
+sub item {
+    my ($self, $id) = @_;
+    my $items = $self->{'items_by_id'} ||= { map { $_->{'#'} => $_ } $self->items };
+    return $items->{$id};
+}
+
+sub merge {
+    my ($self, $obj, $k, $op, $v) = @_;
+    my $d = $obj;
+    my $r = ref $obj;
+    while ($k =~ /[\[\].]/) {
+        if ($k =~ s/^([^\[.]+)\.//) {
+            $d = $d->{$1} ||= {};
+        }
+        else {
+            die "Huh?";
+        }
+        $r = ref $d;
+    }
+    if ($op eq '+') {
+        my $vprev = $d->{$k};
+        my $r = defined $vprev ? ref $vprev : '';
+        if ($r eq '') {
+            $d->{$k} = [ defined $vprev ? ($vprev) : (), $v ];
+        }
+        elsif ($r eq 'ARRAY') {
+            push @$vprev, $v;
+        }
+        else {
+            die "attempt to add to non-list: $vprev <= $k $op $v";
+        }
+    }
+    elsif ($op eq '=') {
+        $d->{$k} = $v;
+    }
 }
 
 sub _read_file {
@@ -65,6 +103,7 @@ sub _read_items {
     my @items;
     while (<$fh>) {
         next if /^\s*(?:#.*)?$/;
+        chomp;
         if (/^!include\s+(\S+)$/) {
             my $source = File::Spec->rel2abs($1, dirname($f));
             my @files = -d $source ? grep { -f } glob("$source/*.ei") : (glob($source));
@@ -185,6 +224,11 @@ sub write {
     }
 }
 
+sub prototypes {
+    my ($self);
+    return keys %{ $self->{config}{prototypes} };
+}
+
 sub prototype {
     my ($self, $p) = @_;
     my $proto = $self->{config}{prototypes}{$p} or return;
@@ -242,6 +286,128 @@ sub trim {
     return '' if !defined;
     s/^\s+|\s+$//g;
     return $_;
+}
+
+sub fill_placeholders {
+    my ($self, $obj, %actions) = @_;
+    my %placeholders = placeholders($obj);
+    my %order = qw(
+        id       00000
+        uuid     00001
+        title    00002
+        location 00003
+    );
+    my @ordered_placeholders = sort {
+        my ($ak, $bk) = map { $_->[0] } $a, $b;
+        ($order{$ak} // $ak)
+        cmp
+        ($order{$bk} // $bk)
+    } values %placeholders;
+    foreach (@ordered_placeholders) {
+        my ($key, $setter, $action, @args) = @$_;
+        $key =~ s/^\.// or die "Huh?";
+        my $sub = $self->can('ph_'.$action) || $actions{$action} || $actions{'*'}
+            || die "Unknown placeholder action: $action";
+        $sub->($self, $key, $setter, @args);
+        last if !$self->{running};
+    }
+}
+
+
+# --- Placeholder handlers
+
+sub ph_mint {
+    my ($self, $key, $setter, $m, @etc) = @_;
+    my $minter = $self->{config}{minters}{$m} or die "No such minter: $m";
+    my ($cmd, $args) = @$minter{qw(command arguments)};
+    open my $fh, '-|', $cmd, @{ $args || [] } or die;
+    my $val = <$fh>;
+    die "$cmd: no value returned" if !defined $val;
+    chomp $val;
+    $setter->($val);
+    my $label = $self->{config}{labels}{$key} // ucfirst $key;
+    print STDERR "  $label: $val\n";
+}
+
+sub ph_string {
+    my ($self, $key, $setter, @args) = @_;
+    my $label = $self->{config}{labels}{$key} // ucfirst $key;
+    $setter->($self->ask($label));
+}
+
+sub ph_list {
+    my ($self, $key, $setter, @args) = @_;
+    my $label = $self->{config}{labels}{$key} // ucfirst $key;
+    $setter->([ split /,\s*/, $self->ask($label) ]);
+}
+
+sub ph_location {
+    my ($self, $key, $setter, @args) = @_;
+    my $label = $self->{config}{labels}{$key} // ucfirst $key;
+    my %loc = %{ $self->{config}{locations} || {} };
+    my $locmsg = sprintf "Valid locations: %s\n", join(', ', sort keys %loc);
+    my $loc = $self->ask($label, 'home', sub {
+        return 1 if defined $loc{$_};
+        print STDERR $locmsg, "\n";
+        return undef;
+    });
+    $setter->($loc);
+}
+
+sub ask {
+    my ($self, $label, $default, $validate) = @_;
+    if (!$self->{interactive}) {
+        return $default if defined $default;
+        return if $self->{unaskable};
+        die "$label Can't ask -- not running interactively";
+    }
+    local $_;
+    while (1) {
+        print STDERR "  $label: ";
+        print STDERR "[$default] " if defined $default;
+        $_ = <STDIN>;
+        chomp;
+        return $default if $_ eq '' && defined $default;
+        last if !$validate || $validate->();
+        # print STDERR "** That is not valid **\n";
+    }
+    return $_;
+}
+
+sub instantiate {
+    my ($obj) = @_;
+}
+
+sub placeholders {
+    my ($hash) = @_;
+    my @placeholders = _hash_placeholders($hash);
+    return map {
+        my $k =  $_->[0];
+        $k => $_
+    } @placeholders;
+}
+
+sub _hash_placeholders {
+    my ($hash, @path) = @_;
+    my @p;
+    while (my ($k, $v) = each %$hash) {
+        my $r = ref $v;
+        if ($r eq 'HASH') {
+            push @p, _hash_placeholders($v, ".$k");
+        }
+        elsif ($r eq 'ARRAY') {
+            push @p, _array_placeholders($v, "[$k]");
+        }
+        elsif ($r ne '') {
+            die "Huh???";
+        }
+        elsif ($v =~ /^<(.+)>$/) {
+            my $setter = sub { $hash->{$k} = shift };
+            my ($action, @args) = split /\s*:\s*/, $1;
+            push @p, [ join('', @path, ".$k"), $setter, $action, @args ];
+        }
+    }
+    return @p;
 }
 
 1;

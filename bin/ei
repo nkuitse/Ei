@@ -26,6 +26,7 @@ if (!defined $config_file) {
 }
 my $ei = Ei->new(
     defined $config_file ? ('config_file' => $config_file) : (),
+    'running' => 1,
 );
 my %config = %{ $ei->{config} };
 
@@ -68,14 +69,19 @@ elsif ($ARGV[0] =~ m{^[+](.+)}) {
 # --- Commands
 
 sub cmd_find {
-    my ($location);
+    my ($l, $p);
     GetOptions(
-        'l=s' => \$location,
+        'l|location=s' => \$l,
+        'p|prototype=s' => \$p,
     ) or usage;
-    if ($location) {
-        my @items = grep { ($_->{location} // '') eq $location } $ei->items;
-        out( sort byid @items );
+    my @items;
+    if ($l) {
+        @items = grep { ($_->{location} // '') eq $l } $ei->items;
     }
+    elsif ($p) {
+        @items = grep { ($_->{type} // '') eq $p } $ei->items;
+    }
+    out( sort byid @items );
 }
 
 sub cmd_add {
@@ -83,41 +89,23 @@ sub cmd_add {
     GetOptions(
         'p=s' => \$p,
     ) or usage;
+    usage if @ARGV;
     my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
     my $fh;
-    my ($n, $nadded, $running) = (0, 0, 1);
-    $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $running = 0; print STDERR "\n" };
+    my ($n, $nadded) = (0, 0);
+    $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $ei->{running} = 0; print STDERR "\n" };
 ITEM:
     while (1) {
         print STDERR '-' x 80, "\n";
         # printf STDERR "\e[32;1m%80d\e[0m\n", ++$n;
         my $obj = clone($proto->{properties});
-        my %placeholders = placeholders($obj);
-        my %order = qw(
-            id       00000
-            uuid     00001
-            title    00002
-            location 00003
-        );
-        my @ordered_placeholders = sort {
-            my ($ak, $bk) = map { $_->[0] } $a, $b;
-            ($order{$ak} // $ak)
-            cmp
-            ($order{$bk} // $bk)
-        } values %placeholders;
-        foreach (@ordered_placeholders) {
-            my ($key, $setter, $action, @args) = @$_;
-            $key =~ s/^\.// or die "Huh?";
-            my $sub = __PACKAGE__->can('ph_'.$action) || fatal "Unknown placeholder action: $action";
-            $sub->($key, $setter, @args);
-            last ITEM if !$running;
-        }
+        $ei->fill_placeholders($obj);
         if (!defined $fh) {
             my $save_file = $config{files}{save};
             $save_file = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
             open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
         }
-        last if !$running;
+        last if !$ei->{running};
         my $id = $obj->{'id'};
         print STDERR "\e[32mSave $id?\e[0m [Ynq] ";
         my $ans = <STDIN>;
@@ -125,6 +113,7 @@ ITEM:
         next if $ans =~ /^[Nn]/;
         $ei->write($fh, $obj);
         $nadded++;
+        last if !$ei->{running};
     }
     print STDERR '-' x 80, "\n";
     printf STDERR "\n\e[1m%d %s added\e[0m\n",
@@ -158,98 +147,67 @@ sub cmd_grep {
     #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
 }
 
-# --- Placeholder handlers
-
-sub ph_mint {
-    my ($key, $setter, $m, @etc) = @_;
-    my $minter = $config{minters}{$m} or fatal "No such minter: $m";
-    my ($cmd, $args) = @$minter{qw(command arguments)};
-    open my $fh, '-|', $cmd, @{ $args || [] } or die;
-    my $val = <$fh>;
-    fatal "$cmd: no value returned" if !defined $val;
-    chomp $val;
-    $setter->($val);
-    my $label = $config{labels}{$key} // ucfirst $key;
-    print STDERR "  $label: $val\n";
+sub cmd_batch {
+    my $in_file = '-';
+    my $location = 'home';
+    my ($out_file);
+    GetOptions(
+        'f|file=s' => \$in_file,
+        'o|output=s' => \$out_file,
+        'O' => sub { $out_file = '-' },  # Print to stdout
+        'l|location=s' => \$location,
+    ) or usage;
+    if (defined $in_file && $in_file ne '-' && $in_file ne '/dev/stdin') {
+        open \*STDIN, '<', $in_file or fatal "open $in_file for input: $!";
+    }
+    if (defined $out_file && $out_file ne '-' && $out_file ne '/dev/stdout') {
+        open \*STDOUT, '>>', $out_file or fatal "open $out_file for output: $!";
+    }
+    elsif (!defined $out_file) {
+        my $save_file = $config{files}{save};
+        $save_file = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
+        open \*STDOUT, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
+    }
+    my %proto;
+    while (<STDIN>) {
+        if (/^add\s+(\S+)\s+\{$/) {
+            my $p = $1;
+            my $proto = $proto{$p} ||= $ei->prototype($p) || fatal "No such prototype: $p";
+            my $hash = $ei->_read_hash(\*STDIN, '-', $.);
+            my $obj = clone({ %{$proto->{properties}}, %$hash });
+            $ei->fill_placeholders($obj,
+                '*' => sub {
+                    my ($key, $setter, @args) = @_;
+                    $setter->(undef);
+                },
+            );
+            $obj->{location} //= $location;
+            foreach (keys %$obj) {
+                delete $obj->{$_} if !defined $obj->{$_};
+            }
+            $ei->write(\*STDOUT, $obj);
+        }
+        elsif (/^delete\s+(\S+)$/) {
+            fatal "delete not yet implemented";
+        }
+        elsif (/^update\s+(\S+)\s+\{$/) {
+            fatal "update not yet implemented";
+        }
+    }
 }
 
-sub ph_string {
-    my ($key, $setter, @args) = @_;
-    my $label = $config{labels}{$key} // ucfirst $key;
-    $setter->(ask($label));
-}
-
-sub ph_list {
-    my ($key, $setter, @args) = @_;
-    my $label = $config{labels}{$key} // ucfirst $key;
-    $setter->([ split /,\s*/, ask($label) ]);
-}
-
-sub ph_location {
-    my ($key, $setter, @args) = @_;
-    my $label = $config{labels}{$key} // ucfirst $key;
-    my %loc = %{ $config{locations} || {} };
-    my $locmsg = sprintf "Valid locations: %s\n", join(', ', sort keys %loc);
-    my $loc = ask($label, 'home', sub {
-        return 1 if defined $loc{$_};
-        print STDERR $locmsg, "\n";
-        return undef;
-    });
-    $setter->($loc);
+sub cmd_proto {
+    if (!@ARGV) {
+        print $_, "\n" for sort $ei->prototypes;
+        return;
+    }
+    foreach my $p (@ARGV) {
+        my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
+        1;
+    }
 }
 
 # --- Other functions
-
-sub ask {
-    my ($label, $default, $validate) = @_;
-    local $_;
-    while (1) {
-        print STDERR "  $label: ";
-        print STDERR "[$default] " if defined $default;
-        $_ = <STDIN>;
-        chomp;
-        return $default if $_ eq '' && defined $default;
-        last if !$validate || $validate->();
-        # print STDERR "** That is not valid **\n";
-    }
-    return $_;
-}
-
-sub instantiate {
-    my ($obj) = @_;
-}
-
-sub placeholders {
-    my ($hash) = @_;
-    my @placeholders = _hash_placeholders($hash);
-    return map {
-        my $k =  $_->[0];
-        $k => $_
-    } @placeholders;
-}
-
-sub _hash_placeholders {
-    my ($hash, @path) = @_;
-    my @p;
-    while (my ($k, $v) = each %$hash) {
-        my $r = ref $v;
-        if ($r eq 'HASH') {
-            push @p, _hash_placeholders($v, ".$k");
-        }
-        elsif ($r eq 'ARRAY') {
-            push @p, _array_placeholders($v, "[$k]");
-        }
-        elsif ($r ne '') {
-            die "Huh???";
-        }
-        elsif ($v =~ /^<(.+)>$/) {
-            my $setter = sub { $hash->{$k} = shift };
-            my ($action, @args) = split /\s*:\s*/, $1;
-            push @p, [ join('', @path, ".$k"), $setter, $action, @args ];
-        }
-    }
-    return @p;
-}
 
 sub byid {
     my ($aa, $an) = ($a->{'#'} =~ /^([a-z]*)([0-9]*)/);
