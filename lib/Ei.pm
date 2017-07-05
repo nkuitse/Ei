@@ -225,7 +225,7 @@ sub write {
 }
 
 sub prototypes {
-    my ($self);
+    my ($self) = @_;
     return keys %{ $self->{config}{prototypes} };
 }
 
