@@ -267,7 +267,8 @@ sub _serialize_hash {
     my ($level, $hash) = @_;
     my @out = '{';
     my $indstr = '  ' x ($level-0);
-    while (my ($k, $v) = each %$hash) {
+    foreach my $k (sort keys %$hash) {
+        my $v = $hash->{$k};
         my @val = _serialize($level, $v);
         push @out, sprintf('%s%s %s', $indstr, $k, shift @val);
         push @out, @val;
