@@ -121,7 +121,9 @@ ITEM:
         $nadded == 1 ? 'item' : 'items';
 }
 
-sub cmd_ed {
+sub cmd_e { goto &cmd_edit }
+
+sub cmd_edit {
     usage if @ARGV < 1;
     my $id = shift @ARGV;
     my @items = grep { $_->{'#'} eq $id } $ei->items;
