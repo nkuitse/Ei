@@ -209,6 +209,38 @@ sub cmd_proto {
     }
 }
 
+sub cmd_export {
+    my $l;
+    my $t = 'yaml';
+    GetOptions(
+        'l|location=s' => \$l,
+        't|format=s' => \$t,
+    ) or usage;
+    my @items = $ei->items;
+    if ($l) {
+        @items = grep { ($_->{location} // '') eq $l } @items;
+    }
+    foreach (@items) {
+        $_->{'id'}   ||= delete $_->{'#'};
+        $_->{'file'} ||= delete $_->{'/'};
+        $_->{'line'} ||= delete $_->{'.'};
+    }
+    if (lc $t eq 'yaml') {
+        eval "use YAML qw(); 1" or fatal "YAML export not available";
+        print YAML::Dump(@items);
+    }
+    elsif (lc $t eq 'flat') {
+        eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
+        foreach (@items) {
+            my $flat = flatten($_);
+            foreach (sort keys %$flat) {
+                print $_, ' ', $flat->{$_}, "\n";
+            }
+            print "\n";
+        }
+    }
+}
+
 # --- Other functions
 
 sub byid {
