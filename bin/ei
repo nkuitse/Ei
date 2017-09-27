@@ -5,12 +5,15 @@ use warnings;
 
 use Ei;
 use Text::Table;
+use Text::ParseWords qw(shellwords);
 use Clone qw(clone);
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
 sub usage;
 sub fatal;
+
+(my $prog = $0) =~ s{.+/}{};
 
 my $config_file;
 GetOptions(
@@ -55,7 +58,7 @@ if (@ARGV == 0) {
     @ARGV = ('ls');
 }
 elsif ($ARGV[0] =~ m{^\@(.+)$}) {
-    splice @ARGV, 0, 1, qw(find -l), $1;
+    splice @ARGV, 0, 1, qw(ls -l), $1;
 }
 elsif ($ARGV[0] =~ m{^/(.+)/$}) {
     splice @ARGV, 0, 1, qw(grep), $1;
@@ -68,7 +71,8 @@ elsif ($ARGV[0] =~ m{^[+](.+)}) {
 
 # --- Commands
 
-sub cmd_find {
+sub cmd_ls {
+    #@ ls [-l LOC] [-p PROTO] :: list items
     my ($l, $p);
     GetOptions(
         'l|location=s' => \$l,
@@ -85,6 +89,7 @@ sub cmd_find {
 }
 
 sub cmd_add {
+    #@ add [-p PROTO] :: add items to the inventory
     my $p = 'object';
     GetOptions(
         'p=s' => \$p,
@@ -122,8 +127,10 @@ ITEM:
 }
 
 sub cmd_e { goto &cmd_edit }
+    #@= edit
 
 sub cmd_edit {
+    #@ edit ITEM :: edit an item
     usage if @ARGV < 1;
     my $id = shift @ARGV;
     my @items = grep { $_->{'#'} eq $id } $ei->items;
@@ -131,17 +138,15 @@ sub cmd_edit {
     system($ENV{'VISUAL'}||$ENV{'EDITOR'}||'vi', "+$_->{'.'}", $_->{'/'}) for $items[0];
 }
 
-sub cmd_ls {
-    out( sort byid $ei->items );
-}
-
 sub cmd_item {
+    #@ item ITEM :: list a single item
     usage if @ARGV < 1;
     my $i = shift @ARGV;
     out( grep { $_->{'#'} eq $i } $ei->items );
 }
 
 sub cmd_grep {
+    #@ grep PATTERN :: list items that match the given pattern
     usage if @ARGV < 1;
     my $patt = shift @ARGV;
     my $rx = qr/$patt/i;
@@ -150,6 +155,7 @@ sub cmd_grep {
 }
 
 sub cmd_batch {
+    #@ batch [-l LOC] [-f INF] [-O] [-o OUTF] :: add a batch of items
     my $in_file = '-';
     my $location = 'home';
     my ($out_file);
@@ -199,6 +205,7 @@ sub cmd_batch {
 }
 
 sub cmd_proto {
+    #@ proto [PROTO] :: list (a) prototype(s)
     if (!@ARGV) {
         print $_, "\n" for sort $ei->prototypes;
         return;
@@ -210,6 +217,7 @@ sub cmd_proto {
 }
 
 sub cmd_export {
+    #@ export [-t TYPE] [-l LOC] :: export item data
     my $l;
     my $t = 'yaml';
     GetOptions(
@@ -239,6 +247,28 @@ sub cmd_export {
             print "\n";
         }
     }
+}
+
+sub cmd_help {
+    #@ help :: show helpful information
+    print STDERR <<'EOS';
+usage: ei [-c CONFIGFILE] COMMAND [ARG...]
+commands:
+EOS
+    my $w = 0;
+    my ($commands, $aliases) = commands();
+    my $table = Text::Table->new(\'  ', 'command', \'  ', 'description');
+    foreach (sort { $a->{'name'} cmp $b->{'name'} } @$commands) {
+        my ($name, $args, $descrip) = @$_{qw(name args description)};
+        $table->add(join(' ', $name, @{ $args || [] }), $descrip || '');
+    }
+    print $table->body;
+    $table = Text::Table->new(\'  ', 'alias', \' = ', 'command');
+    print "aliases:\n";
+    foreach (sort keys %$aliases) {
+        $table->add($_, $aliases->{$_});
+    }
+    print $table->body;
 }
 
 # --- Other functions
@@ -298,12 +328,31 @@ sub out {
 }
 
 sub usage {
-    print STDERR "usage: ei [-c CONFIGFILE] COMMAND [OPTION]...\n";
+    print STDERR "usage: $prog [-c CONFIGFILE] COMMAND [OPTION]...\n";
     exit 1;
 }
 
 sub fatal {
-    print STDERR "ei: @_\n";
+    print STDERR "${prog} @_\n";
     exit 2;
 }
 
+sub commands {
+    open my $fh, '<', $0 or die "open $0: $!";
+    my (@commands, %alias);
+COMMAND:
+    while (<$fh>) {
+        next if !/^sub cmd_(\w+) {/;
+        my $name = $1;
+        my %cmd = ('name' => $name);
+        while (<$fh>) {
+            $alias{$name} = $1, next COMMAND if /^\s*#\@=\s*(\w+)/;
+            last if !/^\s*#\@ (\w+(?:\s+(.+))?) :: (.+)/;
+            my ($args, $descrip) = ($2, $3);
+            $cmd{'args'} = [ shellwords($args) ],
+            $cmd{'description'} = $3;
+        }
+        push @commands, \%cmd;
+    }
+    return (\@commands, \%alias);
+}
