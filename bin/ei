@@ -7,6 +7,7 @@ use Ei;
 use Text::Table;
 use Text::ParseWords qw(shellwords);
 use Clone qw(clone);
+use String::Expando;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
@@ -15,6 +16,7 @@ sub fatal;
 
 (my $prog = $0) =~ s{.+/}{};
 
+my %shell;
 my $config_file;
 GetOptions(
     'c|config-file=s' => \$config_file,
@@ -55,7 +57,7 @@ if ($display) {
 }
 
 if (@ARGV == 0) {
-    @ARGV = ('ls');
+    @ARGV = ('shell');
 }
 elsif ($ARGV[0] =~ m{^\@(.+)$}) {
     splice @ARGV, 0, 1, qw(ls -l), $1;
@@ -271,6 +273,67 @@ EOS
     print $table->body;
 }
 
+sub cmd_shell {
+    my %alias = (
+        'l' => [qw(ls -l)],
+    );
+    %shell = (
+        'running' => 1,
+        'aliases' => \%alias,
+        'prompt' => 'ei:-\e[32m%(location)\e[0;1m-> \e[0m',
+    );
+    {
+        no strict 'refs';
+        no warnings 'redefine';
+        *exit = sub {
+            die;  # Abort current command
+        };
+    }
+    compile_prompt($shell{'prompt'});
+    print STDERR $shell{'prompter'}->();
+    while (<STDIN>) {
+        next if /^\s*(?:#.*)?$/;  # Skip blank lines and comments
+        chomp;
+        if (s/^!\s*//) {
+            system($ENV{'SHELL'} || 'sh', '-c', $_);
+            next;
+        }
+        elsif (/^{(.+)}$/) {
+            eval $1;
+            next;
+        }
+        @ARGV = shellwords($_);
+        my $cmd = shift @ARGV;
+        $cmd =~ tr/-/_/;
+        if ($alias{$cmd}) {
+            $cmd = $alias{$cmd};
+            if (ref $cmd) {
+                ($cmd, @ARGV) = (@$cmd, @ARGV);
+            }
+        }
+        my $sub = __PACKAGE__->can("shellcmd_$cmd")
+               || __PACKAGE__->can("cmd_$cmd");
+        if (!$sub) {
+            print "unrecognized command: $cmd\nenter 'help' for a list\n";
+            next;
+        }
+        eval {
+            $shell{'cmd'} = $cmd;
+            $sub->();
+        };
+        last if !$shell{'running'};
+    }
+    continue {
+        print STDERR $shell{'prompter'}->();
+    }
+}
+
+# --- Shell commands
+
+sub shellcmd_goto {
+    $shell{'location'} = shift @ARGV;
+}
+
 # --- Other functions
 
 sub byid {
@@ -334,7 +397,11 @@ sub usage {
 
 sub fatal {
     print STDERR "${prog} @_\n";
-    exit 2;
+    ::exit(2);
+}
+
+sub exit {
+    CORE::exit(@_);
 }
 
 sub commands {
@@ -354,5 +421,27 @@ COMMAND:
         }
         push @commands, \%cmd;
     }
+    $alias{'/PATT/'} = 'grep PATT';
+    $alias{'@LOC'}   = 'ls -l LOC';
     return (\@commands, \%alias);
 }
+
+sub compile_prompt {
+    my ($prompt) = @_;
+    my %unesc = (
+        '\e' => "\e",
+        '\n' => "\n",
+        '\r' => "\r",
+        '\t' => "\t",
+        '\\' => "\\",
+    );
+    $prompt =~ s/(\\[\\entr])/$unesc{$1}/g;
+    $shell{'prompt'} = $prompt;
+    my $prompt_expando = String::Expando->new;
+    return $shell{'prompter'} = sub {
+        $prompt_expando->expand($prompt, {
+            'location' => $shell{'location'},
+        });
+    }
+}
+
