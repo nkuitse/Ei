@@ -29,11 +29,13 @@ if (!defined $config_file) {
         )
     ;
 }
+
 my $ei = Ei->new(
     defined $config_file ? ('config_file' => $config_file) : (),
     'running' => 1,
 );
-my %config = %{ $ei->{config} };
+my (%config, @items);
+init();
 
 my %outprop = (
     'default' => [
@@ -80,14 +82,14 @@ sub cmd_ls {
         'l|location=s' => \$l,
         'p|prototype=s' => \$p,
     ) or usage;
-    my @items;
+    my @items_to_list;
     if ($l) {
-        @items = grep { ($_->{location} // '') eq $l } $ei->items;
+        @items_to_list = grep { ($_->{location} // '') eq $l } @items;
     }
     elsif ($p) {
-        @items = grep { ($_->{type} // '') eq $p } $ei->items;
+        @items_to_list = grep { ($_->{type} // '') eq $p } @items;
     }
-    out( sort byid @items );
+    out( sort byid @items_to_list );
 }
 
 sub cmd_add {
@@ -102,33 +104,35 @@ sub cmd_add {
     my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
     my $fh;
     my ($n, $nadded) = (0, 0);
-    $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $ei->{running} = 0; print STDERR "\n" };
+    my $save_file = $config{files}{save};
+    $save_file = $config{files}{save} = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
+    open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
+    # $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $ei->{running} = 0; print STDERR "\n" };
 ITEM:
     while (1) {
         print STDERR '-' x 80, "\n";
         # printf STDERR "\e[32;1m%80d\e[0m\n", ++$n;
         my $obj = clone($proto->{properties});
         $obj->{'location'} = $l if defined $l;
-        $ei->fill_placeholders($obj);
-        if (!defined $fh) {
-            my $save_file = $config{files}{save};
-            $save_file = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
-            open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
-        }
-        last if !$ei->{running};
+        my $ok;
+        eval {
+            $ei->fill_placeholders($obj);
+            $ok = 1;
+        };
+        last if !$ok || !$ei->{running};
         my $id = $obj->{'id'};
-        print STDERR "\e[32mSave $id?\e[0m [Ynq] ";
-        my $ans = <STDIN>;
-        last if ($ans // 'Q') =~ /^[Qq]/;
-        next if $ans =~ /^[Nn]/;
         $ei->write($fh, $obj);
+        print STDERR "Item $id saved in $save_file\n";
         $nadded++;
-        last if !$ei->{running};
+        print STDERR "Continue? [Yn] ";
+        my $ans = <STDIN>;
+        last if ($ans // 'y') =~ /^[NnQq]/;
     }
     print STDERR '-' x 80, "\n";
     printf STDERR "\n\e[1m%d %s added\e[0m\n",
         $nadded,
         $nadded == 1 ? 'item' : 'items';
+    $ei->reload, init() if %shell;
 }
 
 sub cmd_e { goto &cmd_edit }
@@ -139,16 +143,20 @@ sub cmd_edit {
     @ARGV = ($shell{'item'}) if !@ARGV && $shell{'item'};
     usage if @ARGV < 1;
     my $id = shift @ARGV;
-    my @items = grep { $_->{'#'} eq $id } $ei->items;
-    fatal "no such item(s): @ARGV" if !@items;
-    system($ENV{'VISUAL'}||$ENV{'EDITOR'}||'vi', "+$_->{'.'}", $_->{'/'}) for $items[0];
+    my @items_to_edit = grep { $_->{'#'} eq $id } @items;
+    fatal "no such item(s): @ARGV" if !@items_to_edit;
+    system($ENV{'VISUAL'}||$ENV{'EDITOR'}||'vi', "+$_->{'.'}", $_->{'/'}) for $items_to_edit[0];
+    if (%shell) {
+        $ei->reload, init();
+        $shell{'item'} = $id;
+    }
 }
 
 sub cmd_item {
     #@ item ITEM :: list a single item
     usage if @ARGV < 1;
     my $i = shift @ARGV;
-    out( grep { $_->{'#'} eq $i } $ei->items );
+    out( grep { $_->{'#'} eq $i } @items );
 }
 
 sub cmd_grep {
@@ -156,8 +164,8 @@ sub cmd_grep {
     usage if @ARGV < 1;
     my $patt = shift @ARGV;
     my $rx = qr/$patt/i;
-    out( grep { match(sub { $_ =~ $rx }) } $ei->items );
-    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } $ei->items );
+    out( grep { match(sub { $_ =~ $rx }) } @items );
+    #out( grep { 0 < grep { $_ =~ $rx } values %$_ } @items );
 }
 
 sub cmd_batch {
@@ -225,29 +233,29 @@ sub cmd_proto {
 sub cmd_export {
     #@ export [-t TYPE] [-l LOC] :: export item data
     my $l = $shell{'location'};
-    my $t = 'yaml';
+    my $t = 'native';
     GetOptions(
         'l|location=s' => \$l,
         't|format=s' => \$t,
     ) or usage;
-    my @items = $ei->items;
+    my @items_to_export = @items;
     if ($l) {
-        @items = grep { ($_->{location} // '') eq $l } @items;
+        @items_to_export = grep { ($_->{location} // '') eq $l } @items_to_export;
     }
-    foreach (@items) {
+    foreach (@items_to_export) {
         print_item($_);
     }
 }
 
 sub print_item {
     my ($item, $format) = @_;
-    my $formatter = __PACKAGE__->can('as_'.lc($format // $shell{'format'} // 'yaml'))
+    my $formatter = __PACKAGE__->can('as_'.lc($format // $shell{'format'} // 'native'))
         or fatal "unknown format: $format";
     my %item = %$item;
     $item{'id'}   ||= delete $item{'#'};
     $item{'file'} ||= delete $item{'/'};
     $item{'line'} ||= delete $item{'.'};
-    $formatter->(\%item);
+    print $formatter->(\%item);
 }
 
 sub cmd_help {
@@ -274,23 +282,7 @@ EOS
 }
 
 sub cmd_shell {
-    %shell = (
-        'running' => 1,
-        'prompt' => 'ei(%(location))> ',
-        %{ $config{'shell'} ||= {} },
-    );
-    {
-        no strict 'refs';
-        no warnings 'redefine';
-        *exit = sub {
-            die;  # Abort current command
-        };
-    }
-    $shell{'items'} = [ $ei->items ];
-    $shell{'locations'} = {
-        map { $_->{'location'} => 1 } $ei->items
-    };
-    $shell{'aliases'}{'q'} ||= 'quit';
+    init_shell();
     compile_prompt($shell{'prompt'});
     print STDERR $shell{'prompter'}->();
     while (<STDIN>) {
@@ -352,25 +344,71 @@ sub shellcmd_view {
     usage if @ARGV > 1;
     my $id = @ARGV ? shift @ARGV : $shell{'item'};
     fatal "no current item" if !$id;
-    my ($item) = grep { $_->{'#'} eq $id } $ei->items;
+    my ($item) = grep { $_->{'#'} eq $id } @items;
     fatal "no such item: $id" if !$item;
     $shell{'item'} = $id;
     print_item($item);
 }
 
 sub shellcmd_format {
-    usage if @ARGV != 1;
-    my $format = shift @ARGV;
-    usage if !__PACKAGE__->can('as_'.$format);
-    $shell{'format'} = $format;
+    if (@ARGV != 1) {
+        print $shell{'format'} ||= 'native', "\n";
+    }
+    else {
+        my $format = shift @ARGV;
+        usage if !__PACKAGE__->can('as_'.$format);
+        $shell{'format'} = $format;
+    }
+}
+
+sub shellcmd_locations {
+    my $locations = $ei->locations;
+    my $table = Text::Table->new('key', 'value');
+    foreach my $l (sort keys %$locations) {
+        $table->add($l, $locations->{$l}{'title'});
+    }
+    print $table->body;
 }
 
 # --- Other functions
 
+sub init {
+    @items = $ei->items;
+    %config = %{ $ei->{config} };
+}
+
+sub init_shell {
+    %shell = (
+        'running' => 1,
+        'prompt' => 'ei(%(location))> ',
+        %{ $config{'shell'} ||= {} },
+    );
+    {
+        no strict 'refs';
+        no warnings 'redefine';
+        *exit = sub {
+            die;  # Abort current command
+        };
+    }
+    $shell{'items'} = \@items;
+    $shell{'locations'} = $ei->{'config'}{'locations'};
+    my %contents;
+    foreach my $item (@items) {
+        push @{ $contents{$item->{'location'} || ''} ||= [] }, $item;
+    }
+    $shell{'contents'} = \%contents;
+    $shell{'aliases'}{'q'} ||= 'quit';
+}
+
+sub as_native {
+    my ($item) = @_;
+    return $ei->serialize($item) . "\n";
+}
+
 sub as_yaml {
     my ($item) = @_;
     eval "use YAML qw(); 1" or fatal "YAML export not available";
-    print YAML::Dump($item);
+    return YAML::Dump($item);
 }
 
 sub as_flat {
@@ -381,7 +419,7 @@ sub as_flat {
     foreach (sort keys %$flat) {
         $table->add($_, $flat->{$_});
     }
-    print $table->body;
+    return $table->body;
 }
 
 sub byid {

@@ -8,15 +8,21 @@ use File::Spec;
 
 use vars qw($VERSION);
 
-$VERSION = '0.06';
+$VERSION = '0.07';
 
 sub new {
     my $cls = shift;
     unshift @_, 'file' if @_ % 2;
-    my $self = bless { @_ }, $cls;
+    my $self = bless {
+        @_,
+    }, $cls;
     my $conf = $self->{config} = $self->_read_config($self->{config_file});
     my $root = $self->{root} ||= glob($conf->{files}{root});
-    my $file = $self->{file} ||= glob($conf->{files}{main});
+    my $file = $self->{file};
+    if (!defined $file) {
+        ($file) = glob($conf->{files}{main});
+        die "no file from which to read inventory" if !defined $file;
+    }
     $self->{defaults} = $conf->{items}{defaults} || {};
     $self->{file} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
     $self->{interactive} ||= -t STDIN;
@@ -39,6 +45,24 @@ sub item {
     my ($self, $id) = @_;
     my $items = $self->{'items_by_id'} ||= { map { $_->{'#'} => $_ } $self->items };
     return $items->{$id};
+}
+
+sub locations {
+    my ($self) = @_;
+    return $self->{config}{locations} ||= {};
+}
+
+sub reload {
+    my $self = shift;
+    if (@_) {
+        die "not yet implemented";
+    }
+    else {
+        my $file = $self->file;
+        $self->{'items'} = [ $self->_read_items($file) ];
+        delete $self->{'items_by_id'};
+    }
+    return $self;
 }
 
 sub merge {
@@ -242,38 +266,39 @@ sub prototype {
 }
 
 sub serialize {
-    my $self = shift;
-    unshift @_, 0;
-    my @out = _serialize(@_);
-    # shift @out;
-    # pop @out;
-    return join "\n", @out;
+    my ($self, $item) = @_;
+    return join "\n", _serialize(0, $item);
 }
 
 sub _serialize {
     my ($level, $val) = @_;
     my $r = ref $val;
-    $_[0]++;
-    goto &_serialize_hash  if $r eq 'HASH';
-    goto &_serialize_array if $r eq 'ARRAY';
-    $_[0]--;
-    die if $r ne '';
-    return $val if $val !~ /^\s/ && $val !~ /^[\\\[\]\{\}]/;
-    $val =~ s/([\\\[\]\{\}])/\\$1/g;
-    return $val;
+    if ($r eq 'HASH') {
+        return _serialize_hash($level+1, $val);
+    }
+    elsif ($r eq 'ARRAY') {
+        return _serialize_array($level+1, $val);
+    }
+    else {
+        die if $r ne '';
+        return $val if $val !~ /^\s/ && $val !~ /^[\\\[\]\{\}]/;
+        $val =~ s/([\\\[\]\{\}])/\\$1/g;
+        return $val;
+    }
 }
 
 sub _serialize_hash {
     my ($level, $hash) = @_;
     my @out = '{';
-    my $indstr = '  ' x ($level-0);
+    my $indstr = '    ' x ($level-0);
     foreach my $k (sort keys %$hash) {
         my $v = $hash->{$k};
         my @val = _serialize($level, $v);
         push @out, sprintf('%s%s %s', $indstr, $k, shift @val);
         push @out, @val;
     }
-    return @out, '}';
+    $indstr =~ s/    $//;
+    return @out, $indstr.'}';
 }
 
 sub unquote {
@@ -362,17 +387,27 @@ sub ask {
         return if $self->{unaskable};
         die "$label Can't ask -- not running interactively";
     }
-    local $_;
-    while (1) {
-        print STDERR "  $label: ";
-        print STDERR "[$default] " if defined $default;
-        $_ = <STDIN>;
-        chomp;
-        return $default if $_ eq '' && defined $default;
-        last if !$validate || $validate->();
-        # print STDERR "** That is not valid **\n";
+    else {
+        local $_;
+        while (1) {
+            my $cancelled;
+            local($SIG{INT}) = local($SIG{QUIT}) = local($SIG{TERM}) = sub {
+                $cancelled = 1;
+            };
+            print STDERR "  $label: ";
+            print STDERR "[$default] " if defined $default;
+            $_ = <STDIN>;
+            if ($cancelled) {
+                print STDERR "\ncancelled\n";
+                $self->{running} = 0;
+                die;
+            }
+            chomp;
+            return $default if $_ eq '' && defined $default;
+            last if !$validate || $validate->();
+        }
+        return $_;
     }
-    return $_;
 }
 
 sub instantiate {
