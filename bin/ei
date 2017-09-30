@@ -75,7 +75,7 @@ elsif ($ARGV[0] =~ m{^[+](.+)}) {
 
 sub cmd_ls {
     #@ ls [-l LOC] [-p PROTO] :: list items
-    my ($l, $p);
+    my ($l, $p) = @shell{qw(location prototype)};
     GetOptions(
         'l|location=s' => \$l,
         'p|prototype=s' => \$p,
@@ -92,9 +92,11 @@ sub cmd_ls {
 
 sub cmd_add {
     #@ add [-p PROTO] :: add items to the inventory
-    my $p = 'object';
+    my $p = $shell{'prototype'} || 'object';
+    my $l = $shell{'location'};
     GetOptions(
-        'p=s' => \$p,
+        'l|location=s' => \$l,
+        'p|prototype=s' => \$p,
     ) or usage;
     usage if @ARGV;
     my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
@@ -106,6 +108,7 @@ ITEM:
         print STDERR '-' x 80, "\n";
         # printf STDERR "\e[32;1m%80d\e[0m\n", ++$n;
         my $obj = clone($proto->{properties});
+        $obj->{'location'} = $l if defined $l;
         $ei->fill_placeholders($obj);
         if (!defined $fh) {
             my $save_file = $config{files}{save};
@@ -133,10 +136,11 @@ sub cmd_e { goto &cmd_edit }
 
 sub cmd_edit {
     #@ edit ITEM :: edit an item
+    @ARGV = ($shell{'item'}) if !@ARGV && $shell{'item'};
     usage if @ARGV < 1;
     my $id = shift @ARGV;
     my @items = grep { $_->{'#'} eq $id } $ei->items;
-    exit 2 if !@items;
+    fatal "no such item(s): @ARGV" if !@items;
     system($ENV{'VISUAL'}||$ENV{'EDITOR'}||'vi', "+$_->{'.'}", $_->{'/'}) for $items[0];
 }
 
@@ -159,7 +163,7 @@ sub cmd_grep {
 sub cmd_batch {
     #@ batch [-l LOC] [-f INF] [-O] [-o OUTF] :: add a batch of items
     my $in_file = '-';
-    my $location = 'home';
+    my $location = $shell{'location'} || 'home';
     my ($out_file);
     GetOptions(
         'f|file=s' => \$in_file,
@@ -220,7 +224,7 @@ sub cmd_proto {
 
 sub cmd_export {
     #@ export [-t TYPE] [-l LOC] :: export item data
-    my $l;
+    my $l = $shell{'location'};
     my $t = 'yaml';
     GetOptions(
         'l|location=s' => \$l,
@@ -231,30 +235,26 @@ sub cmd_export {
         @items = grep { ($_->{location} // '') eq $l } @items;
     }
     foreach (@items) {
-        $_->{'id'}   ||= delete $_->{'#'};
-        $_->{'file'} ||= delete $_->{'/'};
-        $_->{'line'} ||= delete $_->{'.'};
+        print_item($_);
     }
-    if (lc $t eq 'yaml') {
-        eval "use YAML qw(); 1" or fatal "YAML export not available";
-        print YAML::Dump(@items);
-    }
-    elsif (lc $t eq 'flat') {
-        eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
-        foreach (@items) {
-            my $flat = flatten($_);
-            foreach (sort keys %$flat) {
-                print $_, ' ', $flat->{$_}, "\n";
-            }
-            print "\n";
-        }
-    }
+}
+
+sub print_item {
+    my ($item, $format) = @_;
+    my $formatter = __PACKAGE__->can('as_'.lc($format // $shell{'format'} // 'yaml'))
+        or fatal "unknown format: $format";
+    my %item = %$item;
+    $item{'id'}   ||= delete $item{'#'};
+    $item{'file'} ||= delete $item{'/'};
+    $item{'line'} ||= delete $item{'.'};
+    $formatter->(\%item);
 }
 
 sub cmd_help {
     #@ help :: show helpful information
+    my $pfx = %shell ? '' : 'ei [-c CONFIGFILE] ';
     print STDERR <<'EOS';
-usage: ei [-c CONFIGFILE] COMMAND [ARG...]
+usage: ${pfx}COMMAND [ARG...]
 commands:
 EOS
     my $w = 0;
@@ -274,13 +274,10 @@ EOS
 }
 
 sub cmd_shell {
-    my %alias = (
-        'l' => [qw(ls -l)],
-    );
     %shell = (
         'running' => 1,
-        'aliases' => \%alias,
-        'prompt' => 'ei:-\e[32m%(location)\e[0;1m-> \e[0m',
+        'prompt' => 'ei(%(location))> ',
+        %{ $config{'shell'} ||= {} },
     );
     {
         no strict 'refs';
@@ -289,6 +286,11 @@ sub cmd_shell {
             die;  # Abort current command
         };
     }
+    $shell{'items'} = [ $ei->items ];
+    $shell{'locations'} = {
+        map { $_->{'location'} => 1 } $ei->items
+    };
+    $shell{'aliases'}{'q'} ||= 'quit';
     compile_prompt($shell{'prompt'});
     print STDERR $shell{'prompter'}->();
     while (<STDIN>) {
@@ -302,11 +304,11 @@ sub cmd_shell {
             eval $1;
             next;
         }
-        @ARGV = shellwords($_);
+        local @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
         $cmd =~ tr/-/_/;
-        if ($alias{$cmd}) {
-            $cmd = $alias{$cmd};
+        if ($shell{'aliases'}{$cmd}) {
+            $cmd = $shell{'aliases'}{$cmd};
             if (ref $cmd) {
                 ($cmd, @ARGV) = (@$cmd, @ARGV);
             }
@@ -331,10 +333,56 @@ sub cmd_shell {
 # --- Shell commands
 
 sub shellcmd_goto {
-    $shell{'location'} = shift @ARGV;
+    usage if @ARGV != 1;
+    my ($loc) = @ARGV;
+    print STDERR "empty location: $loc\n" if !exists $shell{'locations'}{$loc};
+    $shell{'location'} = $loc;
+}
+
+sub shellcmd_quit {
+    CORE::exit;
+}
+
+sub shellcmd_proto {
+    usage if @ARGV != 1;
+    $shell{'prototype'} = shift @ARGV;
+}
+
+sub shellcmd_view {
+    usage if @ARGV > 1;
+    my $id = @ARGV ? shift @ARGV : $shell{'item'};
+    fatal "no current item" if !$id;
+    my ($item) = grep { $_->{'#'} eq $id } $ei->items;
+    fatal "no such item: $id" if !$item;
+    $shell{'item'} = $id;
+    print_item($item);
+}
+
+sub shellcmd_format {
+    usage if @ARGV != 1;
+    my $format = shift @ARGV;
+    usage if !__PACKAGE__->can('as_'.$format);
+    $shell{'format'} = $format;
 }
 
 # --- Other functions
+
+sub as_yaml {
+    my ($item) = @_;
+    eval "use YAML qw(); 1" or fatal "YAML export not available";
+    print YAML::Dump($item);
+}
+
+sub as_flat {
+    my ($item) = @_;
+    eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
+    my $flat = flatten($item);
+    my $table = Text::Table->new('key', 'value');
+    foreach (sort keys %$flat) {
+        $table->add($_, $flat->{$_});
+    }
+    print $table->body;
+}
 
 sub byid {
     my ($aa, $an) = ($a->{'#'} =~ /^([a-z]*)([0-9]*)/);
@@ -392,7 +440,7 @@ sub out {
 
 sub usage {
     print STDERR "usage: $prog [-c CONFIGFILE] COMMAND [OPTION]...\n";
-    exit 1;
+    ::exit(1);
 }
 
 sub fatal {
