@@ -261,7 +261,7 @@ sub print_item {
 sub cmd_help {
     #@ help :: show helpful information
     my $pfx = %shell ? '' : 'ei [-c CONFIGFILE] ';
-    print STDERR <<'EOS';
+    print STDERR <<"EOS";
 usage: ${pfx}COMMAND [ARG...]
 commands:
 EOS
