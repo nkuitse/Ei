@@ -281,10 +281,15 @@ sub _serialize {
     }
     else {
         die if $r ne '';
-        return $val if $val !~ /^\s/ && $val !~ /^[\\\[\]\{\}]/;
-        $val =~ s/([\\\[\]\{\}])/\\$1/g;
-        return $val;
+        return _serialize_scalar($val);
     }
+}
+
+sub _serialize_scalar {
+    my ($val) = @_;
+    return $val if $val !~ /^\s/ && $val !~ /^[,\\\[\]\{\}]/;
+    $val =~ s/([,\\\[\]\{\}])/\\$1/g;
+    return $val;
 }
 
 sub _serialize_hash {
@@ -299,6 +304,20 @@ sub _serialize_hash {
     }
     $indstr =~ s/    $//;
     return @out, $indstr.'}';
+}
+
+sub _serialize_array {
+    my ($level, $array) = @_;
+    return sprintf '[ %s ]', join(', ', map { _serialize_scalar($_) } @$array);
+### # XXX
+### my $indstr = '    ' x ($level-0);
+### foreach my $v (@$array) {
+###     my @val = _serialize($level, $v);
+###     push @out, sprintf('%s%s', $indstr, shift @val);
+###     push @out, @val;
+### }
+### $indstr =~ s/    $//;
+### return @out, $indstr.']';
 }
 
 sub unquote {

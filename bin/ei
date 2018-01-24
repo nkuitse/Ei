@@ -240,7 +240,12 @@ sub cmd_export {
     ) or usage;
     my @items_to_export = @items;
     if ($l) {
+        usage if @ARGV;
         @items_to_export = grep { ($_->{location} // '') eq $l } @items_to_export;
+    }
+    elsif (@ARGV) {
+        my %want = map { $_ => 1 } @ARGV;
+        @items_to_export = grep { $want{$_->{'#'}} } @items_to_export;
     }
     foreach (@items_to_export) {
         print_item($_);
@@ -325,6 +330,7 @@ sub cmd_shell {
 # --- Shell commands
 
 sub shellcmd_goto {
+    #@ goto LOC :: go to the given location
     usage if @ARGV != 1;
     my ($loc) = @ARGV;
     print STDERR "empty location: $loc\n" if !exists $shell{'locations'}{$loc};
