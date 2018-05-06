@@ -248,7 +248,7 @@ sub cmd_export {
         @items_to_export = grep { $want{$_->{'#'}} } @items_to_export;
     }
     foreach (@items_to_export) {
-        print_item($_);
+        print_item($_, $t);
     }
 }
 
@@ -287,6 +287,7 @@ EOS
 }
 
 sub cmd_shell {
+    #@ shell :: run an interactive command shell
     init_shell();
     compile_prompt($shell{'prompt'});
     print STDERR $shell{'prompter'}->();
@@ -300,6 +301,13 @@ sub cmd_shell {
         elsif (/^{(.+)}$/) {
             eval $1;
             next;
+        }
+        else {
+            s{^\@(.+)$}{ls -l $1}
+                or
+            s{^/(.+)/$}{grep $1}
+                or
+            s{^[+](.+)}}{add -p $1}
         }
         local @ARGV = shellwords($_);
         my $cmd = shift @ARGV;
@@ -338,15 +346,21 @@ sub shellcmd_goto {
 }
 
 sub shellcmd_quit {
+    #@ quit :: exit the shell
     CORE::exit;
 }
 
 sub shellcmd_proto {
-    usage if @ARGV != 1;
+    #@ proto [PROTOTYPE] :: use PROTOTYPE when creating new objects, or list all prototypes
+    if (!@ARGV) {
+        print $_, "\n" for sort $ei->prototypes;
+        return;
+    }
     $shell{'prototype'} = shift @ARGV;
 }
 
 sub shellcmd_view {
+    #@ view [ITEM] :: print data for ITEM (or current item)
     usage if @ARGV > 1;
     my $id = @ARGV ? shift @ARGV : $shell{'item'};
     fatal "no current item" if !$id;
@@ -357,6 +371,7 @@ sub shellcmd_view {
 }
 
 sub shellcmd_format {
+    #@ format FMT :: set export format to FMT
     if (@ARGV != 1) {
         print $shell{'format'} ||= 'native', "\n";
     }
@@ -367,7 +382,8 @@ sub shellcmd_format {
     }
 }
 
-sub shellcmd_locations {
+sub cmd_locations {
+    #@ locations :: print all locations
     my $locations = $ei->locations;
     my $table = Text::Table->new('key', 'value');
     foreach my $l (sort keys %$locations) {
@@ -408,7 +424,7 @@ sub init_shell {
 
 sub as_native {
     my ($item) = @_;
-    return $ei->serialize($item) . "\n";
+    return $ei->serialize($item), "\n";
 }
 
 sub as_yaml {
@@ -425,7 +441,18 @@ sub as_flat {
     foreach (sort keys %$flat) {
         $table->add($_, $flat->{$_});
     }
-    return $table->body;
+    return $table->body, "\n";
+}
+
+sub as_kv {
+    my ($item) = @_;
+    eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
+    my $flat = flatten($item);
+    my $str = '';
+    foreach (sort keys %$flat) {
+        $str .= $_ . '=' . $flat->{$_} . "\n";
+    }
+    return $str, "\n";
 }
 
 sub byid {
@@ -501,8 +528,9 @@ sub commands {
     my (@commands, %alias);
 COMMAND:
     while (<$fh>) {
-        next if !/^sub cmd_(\w+) {/;
-        my $name = $1;
+        next if !/^sub (shell)?cmd_(\w+) {/;
+        next if defined $1 && !$shell{'running'};
+        my $name = $2;
         my %cmd = ('name' => $name);
         while (<$fh>) {
             $alias{$name} = $1, next COMMAND if /^\s*#\@=\s*(\w+)/;
