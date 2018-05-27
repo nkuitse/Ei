@@ -392,6 +392,22 @@ sub cmd_locations {
     print $table->body;
 }
 
+sub cmd_config {
+    #@ config :: print ei config settings
+    eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
+    my $flat = flatten($ei->{'config'});
+    my %keys = map { $_ => 1 } @ARGV;
+    %keys = %$flat if !%keys;
+    foreach (sort keys %keys) {
+        if (@ARGV) {
+            print $flat->{$_}, "\n";
+        }
+        else {
+            print $_, ' ', $flat->{$_}, "\n";
+        }
+    }
+}
+
 # --- Other functions
 
 sub init {
