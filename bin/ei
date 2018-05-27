@@ -393,13 +393,21 @@ sub cmd_locations {
 }
 
 sub cmd_config {
-    #@ config :: print ei config settings
+    #@ config [-r] :: print ei config settings
+    my ($recurse);
+    GetOptions(
+        'r|recurse' => \$recurse,
+    ) or usage;
     eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
     my $flat = flatten($ei->{'config'});
+    @ARGV = map {
+        my $parent = $_;
+        my @children = grep { /^$parent\./ } keys %$flat;
+    } @ARGV if $recurse;
     my %keys = map { $_ => 1 } @ARGV;
-    %keys = %$flat if !%keys;
+    %keys = %$flat if !%keys && !$recurse;
     foreach (sort keys %keys) {
-        if (@ARGV) {
+        if (@ARGV && !$recurse) {
             print $flat->{$_}, "\n";
         }
         else {
