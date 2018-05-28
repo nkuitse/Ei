@@ -16,6 +16,15 @@ sub new {
     my $self = bless {
         @_,
     }, $cls;
+    if ($self->{auto_config} && !defined $self->{config_file}) {
+        ($self->{config_file}) =
+            grep { defined && -f } (
+                $ENV{'EI_CONFIG'},
+                map { glob($_) } qw(~/.eirc ~/etc/ei/ei.conf /etc/ei/ei.conf)
+            )
+        ;
+        die "can't find config file" if !defined $self->{config_file};
+    }
     my $conf = $self->{config} = $self->_read_config($self->{config_file});
     my $root = $self->{root} ||= glob($conf->{files}{root});
     my $file = $self->{file};
@@ -29,6 +38,7 @@ sub new {
     return $self;
 }
 
+sub root { $_[0]->{root} }
 sub file { $_[0]->{file} }
 
 sub find {
