@@ -57,6 +57,38 @@ sub item {
     return $items->{$id};
 }
 
+sub add {
+    my $self = shift;
+    my %arg = %{ $self->{config}{items}{defaults} };
+    while (@_ && !ref $_[0]) {
+        my ($k, $v) = splice @_, 0, 2;
+        $arg{$k} = $v;
+    }
+    my $root = $self->{root};
+    my $default_save_file = $self->{config}{files}{save};
+    my (@objects, %save);
+    foreach my $item (@_) {
+        my $p = $item->{prototype} || $arg{prototype};
+        my $l = $item->{location} || $arg{location};
+        my $proto = $self->prototype($p) or die "No such prototype: $p";
+        my $obj = clone($proto->{properties});
+        $obj->{'location'} = $l if defined $l;
+        $self->fill_placeholders($obj);
+        push @objects, $obj;
+        my $save_file = glob($proto->{save} || $default_save_file);
+        $save_file = "$root/$save_file" if $save_file !~ m{^/};
+        push @{ $save{$save_file} }, $obj;
+    }
+    while (my ($f, $objects) = each %save) {
+        open my $fh, '>>', $f or die "open $f: $!";
+        foreach my $obj (@$objects) {
+            $self->write($fh, $obj);
+        }
+        close $fh;
+    }
+    return @objects;
+}
+
 sub locations {
     my ($self) = @_;
     return $self->{config}{locations} ||= {};

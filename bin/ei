@@ -21,17 +21,10 @@ my $config_file;
 GetOptions(
     'c|config-file=s' => \$config_file,
 ) or usage;
-if (!defined $config_file) {
-    ($config_file) =
-        grep { defined && -f } (
-            $ENV{'EI_CONFIG'},
-            map { glob($_) } qw(~/.eirc ~/etc/ei/ei.conf /etc/ei/ei.conf)
-        )
-    ;
-}
 
 my $ei = Ei->new(
-    defined $config_file ? ('config_file' => $config_file) : (),
+    'config_file' => $config_file,
+    'auto_config' => 1,
     'running' => 1,
 );
 my (%config, @items);
@@ -102,37 +95,27 @@ sub cmd_add {
     ) or usage;
     usage if @ARGV;
     my $proto = $ei->prototype($p) or fatal "No such prototype: $p";
-    my $fh;
-    my ($n, $nadded) = (0, 0);
-    my $save_file = $config{files}{save};
-    $save_file = $config{files}{save} = $config{files}{root} . '/' . $save_file if $save_file !~ m{^/};
-    open $fh, '>>', scalar glob($save_file) or fatal "Can't save to $save_file: $!";
-    # $SIG{INT} = $SIG{QUIT} = $SIG{TERM} = sub { $ei->{running} = 0; print STDERR "\n" };
-ITEM:
+    my (@objects, $n);
     while (1) {
         print STDERR '-' x 80, "\n";
-        # printf STDERR "\e[32;1m%80d\e[0m\n", ++$n;
         my $obj = clone($proto->{properties});
         $obj->{'location'} = $l if defined $l;
-        my $ok;
+        my $continue;
         eval {
             $ei->fill_placeholders($obj);
-            $ok = 1;
+            push @objects, $obj;
+            $n++;
+            $continue = ask_bool('Continue?', 1);
         };
-        last if !$ok || !$ei->{running};
-        my $id = $obj->{'id'};
-        $ei->write($fh, $obj);
-        print STDERR "Item $id saved in $save_file\n";
-        $nadded++;
-        print STDERR "Continue? [Yn] ";
-        my $ans = <STDIN>;
-        last if ($ans // 'y') =~ /^[NnQq]/;
+        last if !$continue;
     }
+    fatal "cancelled" if !$n;
     print STDERR '-' x 80, "\n";
-    printf STDERR "\n\e[1m%d %s added\e[0m\n",
-        $nadded,
-        $nadded == 1 ? 'item' : 'items';
-    $ei->reload, init() if %shell;
+    my $items = $n == 1 ? 'item' : 'items';
+    if (ask_bool("Save $n $items?", 1)) {
+        $ei->add(@objects);
+        $ei->reload, init() if %shell;
+    }
 }
 
 sub cmd_e { goto &cmd_edit }
@@ -394,24 +377,35 @@ sub cmd_locations {
 
 sub cmd_config {
     #@ config [-r] :: print ei config settings
-    my ($recurse);
+    my ($recurse, $strict);
     GetOptions(
         'r|recurse' => \$recurse,
+        's|strict' => \$strict,
     ) or usage;
     eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
     my $flat = flatten($ei->{'config'});
-    @ARGV = map {
-        my $parent = $_;
-        my @children = grep { /^$parent\./ } keys %$flat;
-    } @ARGV if $recurse;
-    my %keys = map { $_ => 1 } @ARGV;
-    %keys = %$flat if !%keys && !$recurse;
-    foreach (sort keys %keys) {
-        if (@ARGV && !$recurse) {
-            print $flat->{$_}, "\n";
+    my @keys;
+    if ($recurse) {
+        @keys = map {
+            my $pfx = $_ . '.';
+            my @k = grep { index($_, $pfx) == 0 } keys %$flat;
+            fatal "no config variables under $_" if $strict && !@k;
+            @k;
+        } @ARGV;
+    }
+    else {
+        @keys = @ARGV ? @ARGV : keys %$flat;
+    }
+    foreach my $k (sort @keys) {
+        my $v = $flat->{$k};
+        if (!defined $v) {
+            fatal "no such config variable: $k" if $strict;
+        }
+        elsif ($recurse || !@ARGV) {
+            print $k, ' ', $v, "\n";
         }
         else {
-            print $_, ' ', $flat->{$_}, "\n";
+            print $v, "\n";
         }
     }
 }
@@ -539,7 +533,7 @@ sub usage {
 }
 
 sub fatal {
-    print STDERR "${prog} @_\n";
+    print STDERR "${prog}: @_\n";
     ::exit(2);
 }
 
@@ -587,5 +581,14 @@ sub compile_prompt {
             'location' => $shell{'location'},
         });
     }
+}
+
+sub ask_bool {
+    my ($prompt, $default) = @_;
+    print STDERR $prompt, ($default ? ' [Yn] ' : ' [yN] ');
+    my $ans = <STDIN>;
+    return 1 if $ans =~ /^[Yy]/;
+    return 0 if $ans =~ /^[Nn]/;
+    return $default;
 }
 

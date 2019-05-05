@@ -4,6 +4,8 @@ use strict;
 use warnings;
 
 use Ei;
+use Graphics::Magick;
+use Barcode::ZBar;
 use Getopt::Long
     qw(:config posix_default gnu_compat require_order bundling no_ignore_case);
 
@@ -16,8 +18,6 @@ my $config_file;
 GetOptions(
     'c|config-file=s' => \$config_file,
 ) or usage;
-usage if @ARGV < 2;
-my $location = shift @ARGV;
 
 if (!defined $config_file) {
     ($config_file) =
@@ -45,6 +45,32 @@ while (@ARGV) {
     }
 }
 
+my $zbar = Barcode::ZBar::Processor->new;
+#$zbar->init;
+#$zbar->set_data_handler(\&my_handler);
+
+my $magick = Graphics::Magick->new;
+foreach my $file (@photos) {
+    $magick->Read($file);
+    1;
+}
+
+my $image = Barcode::ZBar::Image->new;
+$image->set_format('422P');
+$image->set_size(114, 80);
+$image->set_data('');
+$zbar->process_image($image);
+
+my @symbols = $image->get_symbols();
+foreach my $sym (@symbols) {
+    print("decoded: " . $sym->get_type() . ":" . $sym->get_data());
+}
+
+
+
+
+
+__END__
 my @items = grep { $_->{'location'} eq $location } $ei->items;
 if (@items) {
     printf STDERR "The inventory already includes %d %s in %s\n", sgpl(scalar(@items), 'item'), $location;
