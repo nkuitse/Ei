@@ -12,6 +12,7 @@ $VERSION = '0.07';
 
 sub new {
     my $cls = shift;
+    @_ = qw(auto_config 1) if !@_;
     unshift @_, 'file' if @_ % 2;
     my $self = bless {
         @_,
