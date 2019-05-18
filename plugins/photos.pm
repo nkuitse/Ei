@@ -1,4 +1,4 @@
-package Ei::Plugin::hello;
+package Ei::Plugin::photos;
 
 use strict;
 use warnings;
@@ -33,7 +33,7 @@ sub cmd_photos {
     @ARGV = qw(ls) if !@ARGV;
     my $cmd = shift @ARGV;
     my $method = $self->can("cmd_photos_$cmd")
-        or Ei::usage;
+        or Ei::usage();
     $self->$method;
 }
 
@@ -107,31 +107,31 @@ sub save {
 }
 
 sub decode {
-    my ($f) = @_;
+    my ($self, $f) = @_;
     my $magick = Graphics::Magick->new;
     my $err = $magick->Read($f);
-    Ei::fatal "read $f: $err" if $err;
-    Ei::blather "\e[31;1m", $f, "\e[0m : convert...";
+    Ei::fatal("read $f: $err") if $err;
+    Ei::blather("\e[31;1m", $f, "\e[0m : convert...");
     $magick->Scale('geometry' => '800x800');
     $magick->Quantize('colorspace' => 'gray', 'colors' => 256);
     $magick->Set('magick' => 'GRAY');
     my ($w, $h) = $magick->Get(qw(width height));
     my ($data) = $magick->ImageToBlob;
-    Ei::fatal "image: $f" if !defined $data;
-    Ei::blather " ${w}x${h} (", length($data), " bytes :";
-    Ei::blather " find barcodes...";
+    Ei::fatal("image: $f") if !defined $data;
+    Ei::blather(" ${w}x${h} (", length($data), " bytes :");
+    Ei::blather(" find barcodes...");
     my $image = Barcode::ZBar::Image->new;
     $image->set_format('Y800');
     $image->set_size($w, $h);
     $image->set_data($data);
-    $zbar->process_image($image);
+    $self->{'zbar'}->process_image($image);
     my @symbols = $image->get_symbols;
     return grep /:/, map { $_->get_data } @symbols;
-    Ei::blather " none found" if !@symbols;
+    Ei::blather(" none found") if !@symbols;
     foreach my $sym (@symbols) {
-        Ei::blather " found ", $sym->get_type, ":\n", $sym->get_data;
+        Ei::blather(" found ", $sym->get_type, ":\n", $sym->get_data);
     }
-    Ei::blather "\n";
+    Ei::blather("\n");
 }
 
 sub check_location {
