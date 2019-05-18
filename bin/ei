@@ -22,12 +22,14 @@ GetOptions(
     'c|config-file=s' => \$config_file,
 ) or usage;
 
-my $ei = Ei->new(
+my %arg = (
     'config_file' => $config_file,
     'auto_config' => 1,
     'running' => 1,
 );
-my (%config, @items);
+$arg{'plugin_dir'} = $ENV{'EI_PLUGIN_DIR'} if $ENV{'EI_PLUGIN_DIR'};
+my $ei = Ei->new(%arg);
+my (%config, @items, %command, %command_source, %hook);
 init();
 
 my %outprop = (
@@ -64,7 +66,8 @@ elsif ($ARGV[0] =~ m{^[+](.+)}) {
     splice @ARGV, 0, 1, qw(add -p), $1;
 }
 
-&{ __PACKAGE__->can('cmd_' . shift) || usage };
+my $cmd = shift @ARGV;
+&{ $command{$cmd} ||= __PACKAGE__->can('cmd_' . $cmd) || usage };
 
 # --- Commands
 
@@ -415,6 +418,7 @@ sub cmd_config {
 sub init {
     @items = $ei->items;
     %config = %{ $ei->{config} };
+    init_plugins();
 }
 
 sub init_shell {
@@ -590,5 +594,28 @@ sub ask_bool {
     return 1 if $ans =~ /^[Yy]/;
     return 0 if $ans =~ /^[Nn]/;
     return $default;
+}
+
+sub init_plugins {
+    foreach my $plugin (sort { $a->{'name'} cmp $b->{'name'} } values %{ $ei->plugins }) {
+        my $instance = $plugin->{'instance'};
+        my %c = eval { $instance->commands };
+        my %h = eval { $instance->hooks };
+        $plugin->{'commands'} = \%c;
+        $plugin->{'hooks'} = \%h;
+        my $name = $plugin->{'name'};
+        my $file = $plugin->{'file'};
+        while (my ($cmd, $sub) = each %c) {
+            die "plugin $name provides command $cmd but it is already provided"
+                if exists $command{$cmd};
+            $command{$cmd} = sub { $sub->($instance) };
+            $command_source{$cmd} = ['plugin', $name, $file];
+        }
+        while (my ($hook, $sub) = each %h) {
+            die "plugin $name provides hook $hook but it is already provided"
+                if exists $hook{$hook};
+            $hook{$hook} = sub { $sub->($instance) };
+        }
+    }
 }
 
