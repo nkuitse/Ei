@@ -8,13 +8,14 @@ use File::Spec;
 
 use vars qw($VERSION);
 
-$VERSION = '0.07';
+$VERSION = '0.08';
 
 sub new {
     my $cls = shift;
     @_ = qw(auto_config 1) if !@_;
     unshift @_, 'file' if @_ % 2;
     my $self = bless {
+        'plugins' => {},
         @_,
     }, $cls;
     if ($self->{auto_config} && !defined $self->{config_file}) {
@@ -36,11 +37,13 @@ sub new {
     $self->{defaults} = $conf->{items}{defaults} || {};
     $self->{file} = File::Spec->rel2abs($file, $root) if $file !~ m{^/};
     $self->{interactive} ||= -t STDIN;
+    $self->init_plugins($self->{'plugin_dir'} || $conf->{files}{plugins} || "$root/plugin.d");
     return $self;
 }
 
 sub root { $_[0]->{root} }
 sub file { $_[0]->{file} }
+sub plugins { $_[0]->{plugins} }
 
 sub find {
     my $self = shift;
@@ -506,6 +509,32 @@ sub _hash_placeholders {
         }
     }
     return @p;
+}
+
+sub init_plugins {
+    my $self = shift;
+    my %plugin;
+    foreach my $dir (@_) {
+        next if !defined $dir;
+        foreach my $f (glob($dir . '/*.pm')) {
+            warning("invalid plugin file name: $f"), next
+                if $f !~ m{/([a-z]+)\.pm$};
+            my ($name, $cls) = ($1, "Ei::Plugin::$1");
+            my $plugin = eval {
+                require $f;
+                my $instance = $cls->new('ei' => $self);
+                $instance->init if $instance->can('init');
+                $plugin{$name} = {
+                    'name' => $name,
+                    'file' => $f,
+                    'class' => $cls,
+                    'instance' => $instance,
+                };
+            };
+            die "can't load plugin $name: ", (split /\n/, $@)[0] if !$plugin;
+        }
+    }
+    $self->{'plugins'} = \%plugin;
 }
 
 1;
