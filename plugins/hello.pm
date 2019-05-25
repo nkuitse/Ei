@@ -1,25 +1,21 @@
 package Ei::Plugin::hello;
 
+use base qw(Ei::Plugin);
+
 use strict;
 use warnings;
 
-sub new {
-    my $cls = shift;
-    bless { @_ }, $cls;
-}
-
 sub commands {
     return (
-        'hello' => \&hello,
+        'hello' => \&cmd_hello,
     );
 }
 
-sub hooks { }
-
-sub hello {
+sub cmd_hello {
     my $self = shift;
-    @_ = qw(world) if !@_;
-    print STDERR "Hello @_\n";
+    $self->usage('hello [NAME]') if @ARGV > 1;
+    @ARGV = qw(world) if !@ARGV;
+    print STDERR "Hello @ARGV\n";
 }
 
 1;
