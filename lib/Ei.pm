@@ -548,6 +548,9 @@ sub new {
     bless { @_ }, $cls;
 }
 
+sub commands { }
+sub hooks { }
+
 sub ei { $_[0]{'ei'} }
 sub config { $_[0]{'config'} }
 
