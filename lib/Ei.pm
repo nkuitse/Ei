@@ -8,7 +8,7 @@ use File::Spec;
 
 use vars qw($VERSION);
 
-$VERSION = '0.08';
+$VERSION = '0.09';
 
 sub new {
     my $cls = shift;
@@ -513,6 +513,7 @@ sub _hash_placeholders {
 
 sub init_plugins {
     my $self = shift;
+    my $config = $self->{'config'};
     my %plugin;
     foreach my $dir (@_) {
         next if !defined $dir;
@@ -522,7 +523,10 @@ sub init_plugins {
             my ($name, $cls) = ($1, "Ei::Plugin::$1");
             my $plugin = eval {
                 require $f;
-                my $instance = $cls->new('ei' => $self);
+                my @config;
+                @config = ('config' => $config->{$name})
+                    if $config->{$name};
+                my $instance = $cls->new('ei' => $self, @config);
                 $instance->init if $instance->can('init');
                 $plugin{$name} = {
                     'name' => $name,
@@ -535,6 +539,56 @@ sub init_plugins {
         }
     }
     $self->{'plugins'} = \%plugin;
+}
+
+package Ei::Plugin;
+
+sub new {
+    my $cls = shift;
+    bless { @_ }, $cls;
+}
+
+sub ei { $_[0]{'ei'} }
+sub config { $_[0]{'config'} }
+
+sub dispatch {
+    my ($self, %arg) = @_;
+    $self->usage($arg{'usage'}) if !@ARGV;
+    my @caller = caller(1);
+    my ($pkg, $subname) = @caller[0,3];
+    $subname =~ s/.+:://;
+    $subname .= '_' . shift @ARGV;
+    my $sub = $self->can($subname)
+        or $self->usage($arg{'usage'});
+    $sub->($self);
+}
+
+sub fatal {
+    my $self = shift;
+    App::ei::fatal(@_);
+}
+
+sub usage {
+    my ($self, $msg) = @_;
+    if (!defined $msg) {
+        foreach (1..2) {
+            my @caller = caller($_);
+            my $subname = $caller[3];
+            if ($subname =~ /^.+::([^:]+)::cmd_(.+)/) {
+                my ($plugin, $cmd) = ($1, $2);
+                $cmd =~ tr/_/ /;
+                $msg = $cmd;
+                last;
+            }
+        }
+        if (!defined $msg) {
+            $msg = ref $self;
+            $msg =~ s/.+:://;
+            $msg .= ' COMMAND [ARG...]' if !@_;
+        }
+        $msg .= ' [ARG...]';
+    }
+    App::ei::usage($msg);
 }
 
 1;
