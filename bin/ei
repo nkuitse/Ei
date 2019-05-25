@@ -3,6 +3,8 @@
 use strict;
 use warnings;
 
+package App::ei;
+
 use Ei;
 use Text::Table;
 use Text::ParseWords qw(shellwords);
@@ -418,6 +420,7 @@ sub cmd_config {
 sub init {
     @items = $ei->items;
     %config = %{ $ei->{config} };
+    init_hooks();
     init_plugins();
 }
 
@@ -459,7 +462,7 @@ sub as_flat {
     my ($item) = @_;
     eval "use Hash::Flatten qw(flatten); 1" or fatal "flattened export not available";
     my $flat = flatten($item);
-    my $table = Text::Table->new('key', 'value');
+    my $table = Text::Table->new('key', {'title' => 'value', 'align' => 'left'});
     foreach (sort keys %$flat) {
         $table->add($_, $flat->{$_});
     }
@@ -532,13 +535,14 @@ sub out {
 }
 
 sub usage {
-    print STDERR "usage: $prog [-c CONFIGFILE] COMMAND [OPTION]...\n";
-    ::exit(1);
+    my @msg = @_ ? @_ : ('[-c CONFIGFILE] COMMAND [OPTION]...');
+    print STDERR "usage: $prog ", @msg, "\n";
+    CORE::exit(1);
 }
 
 sub fatal {
     print STDERR "${prog}: @_\n";
-    ::exit(2);
+    CORE::exit(2);
 }
 
 sub exit {
@@ -594,6 +598,14 @@ sub ask_bool {
     return 1 if $ans =~ /^[Yy]/;
     return 0 if $ans =~ /^[Nn]/;
     return $default;
+}
+
+sub init_hooks {
+    my $hash = eval('\%' . __PACKAGE__ . '::');
+    foreach my $k (keys %$hash) {
+        next if $k !~ s/^hook_//;
+        $hook{$k} = $hash->{$k};
+    }
 }
 
 sub init_plugins {
